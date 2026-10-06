@@ -2,7 +2,7 @@
 
 > Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md)
 
-Коротко: положи **один оригинальный MP3** в `input/`, готовый перевод в `input/lyrics.txt`, запусти `RUN.bat`, забери готовый MP3 из `out/`.
+Коротко: положи **один или несколько MP3** в `input/`, добавь соответствующие TXT с переводом, запусти `RUN.bat`, забери готовые MP3 из `out/`.
 
 Windows one-click local pipeline for translating a song vocal while preserving the original song structure.
 
@@ -21,11 +21,13 @@ The default flow:
 
 ## Input
 
-Put exactly one MP3 into `input/`.
+Put one or more MP3 files into `input/`.
 
-Create `input/lyrics.txt` with the translated lyrics. Section labels such as `[Verse 1]` and `[Chorus]` are supported. The pipeline adds ACE language metadata automatically; it does not rewrite the lyric text.
+For a single track, `input/lyrics.txt` is supported. For batch mode, use matching files such as `input/lyrics/song1.txt` for `input/song1.mp3`, or place `song1.txt` beside `song1.mp3`. Section labels such as `[Verse 1]` and `[Chorus]` are supported. The pipeline adds ACE language metadata automatically; it does not rewrite the lyric text.
 
-Optional: put `input/reference.wav` there if you want to choose the voice reference manually. Otherwise it is extracted automatically from the Demucs vocal stem.
+Optional: use `input/reference/<track name>.wav` for per-track voice references, or `input/reference.wav` as a shared fallback. Otherwise a reference is extracted automatically from each Demucs vocal stem.
+
+Batch jobs are processed sequentially to limit VRAM usage. By default, one failed track does not stop the remaining tracks.
 
 ## Run
 
