@@ -1,0 +1,198 @@
+param(
+    [switch]$ForceRepair
+)
+
+$ErrorActionPreference = 'Stop'
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Runtime = Join-Path $Root 'runtime'
+$Logs = Join-Path $Root 'logs'
+$Ace = Join-Path $Runtime 'ACE-Step-1.5'
+$Seed = Join-Path $Runtime 'seed-vc'
+$SeedReq = Join-Path $Root 'seedvc_inference_requirements.txt'
+
+New-Item -ItemType Directory -Force -Path $Runtime, $Logs | Out-Null
+$TranscriptStarted = $false
+try {
+    Start-Transcript -Path (Join-Path $Logs 'setup.log') -Append -ErrorAction Stop | Out-Null
+    $TranscriptStarted = $true
+} catch {
+}
+
+function Refresh-Path {
+    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $extra = @(
+        "$env:USERPROFILE\.local\bin",
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links",
+        'C:\Program Files\Git\cmd'
+    ) -join ';'
+    $env:Path = "$machine;$user;$extra;$env:Path"
+}
+
+function Has-Command([string]$Name) {
+    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Invoke-UvArgs([string[]]$Args, [int]$Retries = 3) {
+    for ($i = 1; $i -le $Retries; $i++) {
+        Write-Host "uv $($Args -join ' ')"
+        & uv @Args
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        if ($i -lt $Retries) {
+            Write-Warning "uv command failed (attempt $i/$Retries). Retrying..."
+            Start-Sleep -Seconds (3 * $i)
+        }
+    }
+    throw "uv command failed after $Retries attempts: uv $($Args -join ' ')"
+}
+
+function Try-UvArgs([string[]]$Args) {
+    Write-Host "uv $($Args -join ' ')"
+    & uv @Args
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Test-Python([string]$Python, [string]$Code) {
+    if (-not (Test-Path $Python)) {
+        return $false
+    }
+    & $Python -c $Code
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Ensure-WingetPackage([string]$CommandName, [string]$PackageId) {
+    if (Has-Command $CommandName) {
+        return
+    }
+    if (-not (Has-Command 'winget')) {
+        throw "$CommandName is missing and winget is unavailable. Install $CommandName manually, then run SETUP_ONLY.bat."
+    }
+    Write-Host "Installing $PackageId..."
+    & winget install --id $PackageId -e --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw "winget failed to install $PackageId"
+    }
+    Refresh-Path
+    if (-not (Has-Command $CommandName)) {
+        throw "$PackageId was installed but $CommandName is still not visible in PATH. Restart RUN.bat."
+    }
+}
+
+try {
+    Write-Host '=== Vocal Translate AI v4: setup / verify ==='
+    Refresh-Path
+    $env:UV_HTTP_TIMEOUT = '180'
+    $env:UV_HTTP_RETRIES = '5'
+    $env:PYTHONUTF8 = '1'
+    $env:PYTHONIOENCODING = 'utf-8'
+
+    Ensure-WingetPackage 'git' 'Git.Git'
+    Ensure-WingetPackage 'uv' 'astral-sh.uv'
+    Ensure-WingetPackage 'ffmpeg' 'Gyan.FFmpeg'
+
+    if (-not (Test-Path (Join-Path $Ace '.git'))) {
+        Write-Host '[ACE-Step] Cloning repository...'
+        & git clone https://github.com/ACE-Step/ACE-Step-1.5.git $Ace
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to clone ACE-Step.'
+        }
+    } else {
+        Write-Host '[ACE-Step] Existing repository found. No automatic git pull.'
+    }
+
+    $AcePython = Join-Path $Ace '.venv\Scripts\python.exe'
+    $AceOk = Test-Python $AcePython "import torch, acestep; print('ACE torch:', torch.__version__); print('ACE CUDA:', torch.cuda.is_available())"
+    if ($ForceRepair -or -not $AceOk) {
+        Write-Host '[ACE-Step] Creating/repairing environment WITHOUT flash-attn...'
+        Push-Location $Ace
+        try {
+            Invoke-UvArgs @('sync', '--frozen', '--no-install-package', 'flash-attn') 3
+        } finally {
+            Pop-Location
+        }
+    } else {
+        Write-Host '[ACE-Step] Environment OK. Skipping uv sync.'
+    }
+
+    if (-not (Test-Python $AcePython "import demucs; print('Demucs OK')")) {
+        Write-Host '[Demucs] Missing. Trying uv cache first...'
+        $offline = Try-UvArgs @('pip', 'install', '--offline', '--python', $AcePython, 'demucs==4.0.1')
+        if (-not $offline) {
+            Write-Host '[Demucs] Not in local cache. Installing from PyPI...'
+            Invoke-UvArgs @('pip', 'install', '--python', $AcePython, 'demucs==4.0.1') 4
+        }
+    } else {
+        Write-Host '[Demucs] Already installed.'
+    }
+
+    if (-not (Test-Path (Join-Path $Seed '.git'))) {
+        Write-Host '[Seed-VC] Cloning repository...'
+        & git clone https://github.com/Plachtaa/seed-vc.git $Seed
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to clone Seed-VC.'
+        }
+    } else {
+        Write-Host '[Seed-VC] Existing repository found. No automatic git pull.'
+    }
+
+    $SeedPython = Join-Path $Seed '.venv\Scripts\python.exe'
+    if (-not (Test-Path $SeedPython)) {
+        Write-Host '[Seed-VC] Creating Python 3.10 environment...'
+        & uv venv (Join-Path $Seed '.venv') --python 3.10
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to create Seed-VC venv.'
+        }
+    }
+
+    $SeedTorchOk = Test-Python $SeedPython "import torch, torchaudio; print('Seed torch:', torch.__version__); print('Seed CUDA build:', torch.version.cuda); assert torch.version.cuda is not None"
+    if ($ForceRepair -or -not $SeedTorchOk) {
+        Write-Host '[Seed-VC] Installing CUDA 12.8 PyTorch. Trying uv cache first...'
+        $torchArgs = @(
+            'pip', 'install', '--python', $SeedPython,
+            '--index-url', 'https://download.pytorch.org/whl/cu128',
+            'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128'
+        )
+        $offlineTorch = @('pip', 'install', '--offline', '--python', $SeedPython, '--index-url', 'https://download.pytorch.org/whl/cu128', 'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128')
+        if (-not (Try-UvArgs $offlineTorch)) {
+            Invoke-UvArgs $torchArgs 4
+        }
+    } else {
+        Write-Host '[Seed-VC] PyTorch already installed. No download.'
+    }
+
+    $SeedImports = "import numpy, scipy, librosa, huggingface_hub, munch, einops, transformers, soundfile, yaml; print('Seed inference dependencies OK')"
+    $SeedDepsOk = Test-Python $SeedPython $SeedImports
+    if ($ForceRepair -or -not $SeedDepsOk) {
+        Write-Host '[Seed-VC] Installing minimal inference dependencies. Trying uv cache first...'
+        $offlineDeps = @('pip', 'install', '--offline', '--python', $SeedPython, '-r', $SeedReq)
+        if (-not (Try-UvArgs $offlineDeps)) {
+            Invoke-UvArgs @('pip', 'install', '--python', $SeedPython, '-r', $SeedReq) 4
+        }
+    } else {
+        Write-Host '[Seed-VC] Inference dependencies already installed.'
+    }
+
+    if (-not (Test-Python $SeedPython $SeedImports)) {
+        throw 'Seed-VC dependency verification failed. See logs/setup.log.'
+    }
+
+    if (-not (Test-Path (Join-Path $Seed 'inference.py'))) {
+        throw 'Seed-VC inference.py is missing.'
+    }
+
+    Set-Content -Path (Join-Path $Runtime '.last_setup_ok') -Value (Get-Date -Format o) -Encoding ascii
+    Write-Host ''
+    Write-Host 'SETUP / VERIFY COMPLETE.' -ForegroundColor Green
+    exit 0
+} catch {
+    Write-Host ''
+    Write-Host "SETUP ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host 'See logs\setup.log for details.' -ForegroundColor Yellow
+    exit 1
+} finally {
+    if ($TranscriptStarted) {
+        try { Stop-Transcript | Out-Null } catch {}
+    }
+}
