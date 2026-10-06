@@ -4,8 +4,11 @@ runtime/
 # User audio and lyrics
 input/*.mp3
 input/*.wav
-input/lyrics.txt
-input/lyrics_acestep.txt
+input/*.txt
+input/lyrics/*.txt
+input/reference/*.wav
+!input/README.txt
+!input/lyrics.example.txt
 
 # Generated data
 out/*
