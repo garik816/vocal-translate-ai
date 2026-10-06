@@ -1,0 +1,6 @@
+[Verse 1]
+Put your translated lyrics here.
+Keep line breaks close to the original vocal phrases.
+
+[Chorus]
+Put the chorus here.
