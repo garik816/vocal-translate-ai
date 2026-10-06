@@ -55,11 +55,15 @@ def build_instrumental(stems: dict[str, Path], track_work: Path, ffmpeg: str) ->
 
 
 def build_reference(vocals: Path, track_work: Path, ffmpeg: str,
-                    cfg: dict[str, Any]) -> Path:
-    manual = INPUT_DIR / "reference.wav"
-    if manual.exists():
-        log("[Reference] Using input/reference.wav")
-        return manual
+                    cfg: dict[str, Any], original: Path) -> Path:
+    per_track = INPUT_DIR / "reference" / f"{original.stem}.wav"
+    sibling = INPUT_DIR / f"{original.stem}.wav"
+    shared = INPUT_DIR / "reference.wav"
+    for manual in (per_track, sibling, shared):
+        if manual.exists():
+            log(f"[Reference] Using {manual.relative_to(ROOT)}")
+            return manual
+
     output = track_work / "reference.wav"
     seconds = int(cfg.get("reference_seconds", 22))
     threshold = str(cfg.get("reference_silence_threshold", "-45dB"))
@@ -76,6 +80,7 @@ def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
     vg = float(cfg.get("mix_vocal_gain_db", 0.0))
     ig = float(cfg.get("mix_instrumental_gain_db", 0.0))
     bitrate = str(cfg.get("output_bitrate", "320k"))
+    lang = str(cfg.get("vocal_language", "uk"))
     results: list[Path] = []
     for index, vocal in enumerate(vocals, 1):
         mixed = track_work / f"mixed_{index:02d}.wav"
@@ -85,7 +90,7 @@ def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
                     "-filter_complex", filt, "-map", "[out]", "-c:a", "pcm_s24le",
                     str(mixed)], LOG_DIR / "ffmpeg.log")
         suffix = "" if len(vocals) == 1 else f"_{index:02d}"
-        final = out_dir / f"{original.stem}_uk{suffix}.mp3"
+        final = out_dir / f"{original.stem}_{lang}{suffix}.mp3"
         run_logged([ffmpeg, "-y", "-i", str(mixed), "-i", str(original),
                     "-map", "0:a:0", "-map", "1:v?", "-map_metadata", "1",
                     "-c:a", "libmp3lame", "-b:a", bitrate, "-c:v", "copy",
