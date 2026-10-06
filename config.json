@@ -1,0 +1,22 @@
+{
+  "lyrics_file": "input/lyrics.txt",
+  "vocal_language": "uk",
+  "demucs_model": "htdemucs",
+  "demucs_device": "cuda",
+  "demucs_cpu_fallback": true,
+  "reuse_demucs": true,
+  "reference_seconds": 22,
+  "reference_silence_threshold": "-45dB",
+  "caption": "male baritone rock vocal, dark post-punk delivery, dry isolated lead vocal, no instruments, no accompaniment, no backing vocals, preserve the source melody, rhythm, phrasing and timing",
+  "ace_model": "acestep-v15-turbo",
+  "cover_strength": 0.88,
+  "ace_inference_steps": 8,
+  "ace_batch_size": 1,
+  "seed_vc_diffusion_steps": 30,
+  "seed_vc_cfg_rate": 0.70,
+  "seed_vc_pitch_shift": 0,
+  "mix_vocal_gain_db": 0.0,
+  "mix_instrumental_gain_db": 0.0,
+  "output_bitrate": "320k",
+  "api_port": 8001
+}
