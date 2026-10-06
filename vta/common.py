@@ -89,24 +89,43 @@ def find_ffmpeg() -> str:
     return ffmpeg
 
 
-def find_input_mp3() -> Path:
-    files = sorted(INPUT_DIR.glob("*.mp3"))
+def find_input_mp3s() -> list[Path]:
+    files = sorted(INPUT_DIR.glob("*.mp3"), key=lambda p: p.name.casefold())
     if not files:
-        raise RuntimeError("No MP3 found in input/. Put exactly one original MP3 there.")
-    if len(files) > 1:
-        raise RuntimeError("More than one MP3 found in input/: " + ", ".join(x.name for x in files))
-    return files[0]
+        raise RuntimeError("No MP3 found in input/. Put one or more original MP3 files there.")
+    return files
 
 
-def find_lyrics(cfg: dict[str, Any]) -> Path:
-    candidates: list[Path] = []
-    if cfg.get("lyrics_file"):
-        candidates.append(ROOT / str(cfg["lyrics_file"]))
-    candidates += [INPUT_DIR / "lyrics_acestep.txt", INPUT_DIR / "lyrics.txt"]
+def find_lyrics_for(original: Path, cfg: dict[str, Any], total_tracks: int) -> Path:
+    stem = original.stem
+    candidates = [
+        INPUT_DIR / "lyrics" / f"{stem}.txt",
+        INPUT_DIR / f"{stem}.txt",
+    ]
+
+    # Backward-compatible single-track mode.
+    if total_tracks == 1:
+        if cfg.get("lyrics_file"):
+            candidates.append(ROOT / str(cfg["lyrics_file"]))
+        candidates += [INPUT_DIR / "lyrics_acestep.txt", INPUT_DIR / "lyrics.txt"]
+
+    # Optional: deliberately use one lyric file for every track.
+    if total_tracks > 1 and cfg.get("batch_shared_lyrics", False):
+        if cfg.get("lyrics_file"):
+            candidates.append(ROOT / str(cfg["lyrics_file"]))
+        candidates += [INPUT_DIR / "lyrics_acestep.txt", INPUT_DIR / "lyrics.txt"]
+
     for path in candidates:
         if path.exists():
             return path
-    raise RuntimeError("Lyrics not found. Create input/lyrics.txt or input/lyrics_acestep.txt.")
+
+    expected = [
+        str((INPUT_DIR / "lyrics" / f"{stem}.txt").relative_to(ROOT)),
+        str((INPUT_DIR / f"{stem}.txt").relative_to(ROOT)),
+    ]
+    raise RuntimeError(
+        f"No lyrics found for '{original.name}'. Create " + " or ".join(expected)
+    )
 
 
 def child_env() -> dict[str, str]:
