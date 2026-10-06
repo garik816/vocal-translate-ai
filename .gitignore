@@ -1,0 +1,25 @@
+# Local AI runtimes and downloaded models
+runtime/
+
+# User audio and lyrics
+input/*.mp3
+input/*.wav
+input/lyrics.txt
+input/lyrics_acestep.txt
+
+# Generated data
+out/*
+!out/.gitkeep
+work/*
+!work/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Python / editor noise
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
