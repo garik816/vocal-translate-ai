@@ -1,5 +1,9 @@
 # Vocal Translate AI v4
 
+> Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md)
+
+Коротко: положи **один оригинальный MP3** в `input/`, готовый перевод в `input/lyrics.txt`, запусти `RUN.bat`, забери готовый MP3 из `out/`.
+
 Windows one-click local pipeline for translating a song vocal while preserving the original song structure.
 
 ## Pipeline
