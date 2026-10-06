@@ -1,5 +1,7 @@
 {
   "lyrics_file": "input/lyrics.txt",
+  "batch_shared_lyrics": false,
+  "batch_stop_on_error": false,
   "vocal_language": "uk",
   "demucs_model": "htdemucs",
   "demucs_device": "cuda",
