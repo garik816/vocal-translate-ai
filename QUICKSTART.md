@@ -118,6 +118,7 @@ FFmpeg
 - Windows
 - NVIDIA CUDA
 - RTX 50-series / CUDA 12.8
+- **GeForce RTX 3080 10/12 GB (Ampere, sm_86)** — отдельный профиль
 - **GeForce GTX 970 4 GB (Maxwell)** — отдельный legacy/low-VRAM профиль
 - один или несколько MP3
 - вход: MP3
@@ -192,3 +193,21 @@ DIAGNOSE.bat
 ```
 
 В `logs/diagnose.log` будут GPU, compute capability, список CUDA-архитектур PyTorch и активный `gpu_profile.json`.
+
+
+## RTX 3080 / 10-12 GB VRAM
+
+RTX 3080 определяется автоматически.
+
+Для неё используется профиль `ampere_rtx3080`:
+
+- Ampere `sm_86`
+- PyTorch 2.7.1 + CUDA 12.8
+- ACE-Step использует свой VRAM tier по фактическому объёму карты
+- batch size = 1
+- ACE-Step выгружается перед Seed-VC
+- `MAX_CUDA_VRAM` передаётся ACE-Step по фактическому объёму VRAM (10 или 12 ГБ)
+- lazy CUDA module loading
+- более безопасный allocator profile для снижения фрагментации VRAM
+
+Это позволяет одной и той же папке проекта работать и на RTX 3080, и на RTX 5080, и на GTX 970 — setup проверяет архитектуру установленной карты и нужную сборку PyTorch.
