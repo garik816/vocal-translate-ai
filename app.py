@@ -8,6 +8,7 @@ from vta.common import (ACE_DIR, LOG_DIR, OUT_DIR, RUN_LOG, SEED_DIR, WORK_DIR,
                         find_ffmpeg, find_input_mp3s, find_lyrics_for,
                         load_config, log, require)
 from vta.net import start_ace_server, stop_process_tree
+from vta.gpu import apply_gpu_profile
 
 
 def process_track(original, lyrics, cfg, ffmpeg, base_url):
@@ -38,7 +39,7 @@ def main() -> int:
         path.mkdir(parents=True, exist_ok=True)
     RUN_LOG.write_text("", encoding="utf-8")
 
-    cfg = load_config()
+    cfg = apply_gpu_profile(load_config())
     originals = find_input_mp3s()
     ffmpeg = find_ffmpeg()
     require(ACE_DIR, "ACE-Step runtime")
