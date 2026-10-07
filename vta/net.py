@@ -60,7 +60,7 @@ def health_ok(base_url: str) -> bool:
         return False
 
 
-def start_ace_server(port: int) -> tuple[subprocess.Popen[Any] | None, bool]:
+def start_ace_server(port: int, model_name: str = "acestep-v15-turbo") -> tuple[subprocess.Popen[Any] | None, bool]:
     base_url = f"http://127.0.0.1:{port}"
     if health_ok(base_url):
         log("[ACE] Existing API server detected.")
@@ -71,10 +71,10 @@ def start_ace_server(port: int) -> tuple[subprocess.Popen[Any] | None, bool]:
     handle = ace_log.open("a", encoding="utf-8", errors="replace", buffering=1)
     env = child_env()
     env["ACESTEP_INIT_LLM"] = "false"
-    env["ACESTEP_CONFIG_PATH"] = "acestep-v15-turbo"
+    env["ACESTEP_CONFIG_PATH"] = model_name
     env.update(ace_environment_overrides())
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    log("[ACE] Starting API directly from existing venv (no uv sync)...")
+    log(f"[ACE] Starting API directly from existing venv (model={model_name}, no uv sync)...")
     proc = subprocess.Popen(
         [str(ace_python()), str(runner), "--port", str(port)], cwd=str(ACE_DIR),
         env=env, stdout=handle, stderr=subprocess.STDOUT, creationflags=flags
