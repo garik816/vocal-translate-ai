@@ -21,6 +21,17 @@ def lyrics_text(path: Path, language: str) -> str:
 
 def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
              lyrics_path: Path, track_work: Path) -> list[Path]:
+    guide_dir = track_work / "ace_guides"
+    guide_dir.mkdir(parents=True, exist_ok=True)
+
+    if cfg.get("reuse_ace_guides", True):
+        cached = sorted(guide_dir.glob("guide_*.wav"))
+        if cached:
+            newest_input = max(source.stat().st_mtime, lyrics_path.stat().st_mtime)
+            if all(p.stat().st_size > 0 and p.stat().st_mtime >= newest_input for p in cached):
+                log(f"[ACE] Reusing {len(cached)} cached guide(s); skipping regeneration.")
+                return cached
+
     language = str(cfg.get("vocal_language", "uk"))
     fields = {
         "prompt": str(cfg.get("caption", "isolated lead vocal, preserve melody and timing")),
@@ -62,8 +73,6 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
         if not results:
             raise RuntimeError("ACE completed but returned no audio files.")
         break
-    guide_dir = track_work / "ace_guides"
-    guide_dir.mkdir(parents=True, exist_ok=True)
     guides: list[Path] = []
     for index, item in enumerate(results, 1):
         file_url = item.get("file")
