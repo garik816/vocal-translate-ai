@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 import urllib.parse
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,29 @@ from .common import log
 from .net import download, post_json, post_multipart
 
 
+def _normalize_synthesis_text(text: str, language: str) -> str:
+    # The user's TXT is never modified. This only cleans invisible Unicode
+    # characters before sending text to the singing model.
+    text = (
+        text.replace("\u200b", "")
+            .replace("\u200c", "")
+            .replace("\u200d", "")
+            .replace("\ufeff", "")
+    )
+    if language.lower() == "uk":
+        # In the supplied Ukrainian lyrics, standalone Latin "I" is visually
+        # used as Cyrillic "І". Normalize only that standalone conjunction.
+        text = re.sub(r"(?<![\wА-Яа-яІіЇїЄєҐґ])I(?![\wА-Яа-яІіЇїЄєҐґ])", "І", text)
+    return text
+
+
 def lyrics_text(path: Path, language: str) -> str:
-    text = path.read_text(encoding="utf-8-sig").strip()
-    if not text:
+    raw = path.read_text(encoding="utf-8-sig").strip()
+    if not raw:
         raise RuntimeError(f"Lyrics file is empty: {path}")
+    text = _normalize_synthesis_text(raw, language)
+    if text != raw:
+        log("[Lyrics] Applied synthesis-only Unicode cleanup; source TXT unchanged.")
     if "# Lyric" in text:
         return text
     return f"# Languages\n{language}\n\n# Lyric\n{text}\n"
@@ -86,6 +106,7 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
         "audio_cover_strength": str(cfg.get("cover_strength", 1.0)),
         "cover_noise_strength": str(cfg.get("cover_noise_strength", 0.25)),
         "inference_steps": str(cfg.get("ace_inference_steps", 8)),
+        "guidance_scale": str(cfg.get("ace_guidance_scale", 7.0)),
         "batch_size": str(cfg.get("ace_batch_size", 1)),
         "audio_format": "wav",
         "model": str(cfg.get("ace_model", "acestep-v15-turbo")),
@@ -96,8 +117,13 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
     }
     files = {
         "src_audio": (source.name, source, _mime(source)),
-        "reference_audio": (reference.name, reference, _mime(reference)),
     }
+    if cfg.get("ace_use_reference_audio", False):
+        files["reference_audio"] = (
+            reference.name, reference, _mime(reference)
+        )
+    else:
+        log("[ACE] Voice reference disabled at guide stage; Seed-VC will apply timbre later.")
 
     log(
         "[ACE] Submitting faithful cover task "
