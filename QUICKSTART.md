@@ -1,8 +1,8 @@
-# Короткая инструкция
+# Короткая инструкция v7
 
-## Что положить в `input`
+## 1. Что положить в `input`
 
-### Один трек
+Один трек:
 
 ```text
 input/
@@ -10,9 +10,7 @@ input/
   lyrics.txt
 ```
 
-### Несколько треков
-
-Рекомендуемый вариант:
+Несколько треков:
 
 ```text
 input/
@@ -23,239 +21,132 @@ input/
     song2.txt
 ```
 
-Также поддерживается:
+Имя TXT в batch-режиме должно совпадать с именем MP3.
 
-```text
-input/
-  song1.mp3
-  song1.txt
-  song2.mp3
-  song2.txt
-```
+Твой TXT — главный источник текста. Программа его не переписывает.
 
-Имя TXT должно совпадать с именем MP3.
-
-Пример:
-
-```text
-Крематорий - Мусорный ветер.mp3
-lyrics/Крематорий - Мусорный ветер.txt
-```
-
-## Референс голоса
-
-Не обязателен. Если его нет, программа сама вырежет референс из вокала после Demucs.
-
-Для отдельного референса на каждый трек:
-
-```text
-input/
-  reference/
-    song1.wav
-    song2.wav
-```
-
-Также можно использовать общий:
-
-```text
-input/reference.wav
-```
-
-Приоритет:
-
-1. `input/reference/<имя трека>.wav`
-2. `input/<имя трека>.wav`
-3. `input/reference.wav`
-4. автоматический референс из Demucs
-
-## Как запустить
-
-Запустить:
+## 2. Запуск
 
 ```text
 RUN.bat
 ```
 
-Все MP3 обрабатываются **последовательно**, чтобы не переполнять VRAM.
-
 Результаты:
 
 ```text
-out/
-  song1_uk.mp3
-  song2_uk.mp3
+out/song_uk_guide.mp3
+out/song_uk.mp3
 ```
 
-Если ACE-Step вернёт несколько вариантов:
+- `*_uk_guide.mp3` — украинский DiffSinger **до Seed-VC**.
+- `*_uk.mp3` — финал после переноса тембра.
+
+Сначала слушай `*_uk_guide.mp3`. Если украинский там плохой, проблема ещё до Seed-VC.
+
+## 3. Автоизвлечение текста из MP3
+
+Можно отдельно запустить:
 
 ```text
-song1_uk_01.mp3
-song1_uk_02.mp3
+EXTRACT_LYRICS.bat
 ```
 
-## Что делает автоматически
+Получишь:
+
+```text
+out/song_source_lyrics.txt
+out/song_source_lyrics.srt
+out/song_source_lyrics.json
+```
+
+Алгоритм:
+
+```text
+MP3 ID3 lyrics, если есть
+        +
+Demucs vocals -> Whisper -> текст + тайминги слов/фраз
+```
+
+Извлечённый исходный текст используется для тайминга и проверки. Он **не заменяет** твой украинский TXT.
+
+## 4. Что делает v7
 
 ```text
 MP3
  ↓
 Demucs
  ↓
-vocals / drums / bass / other
+vocals ────────────────┐
+ ↓                     │
+Whisper -> тайминги    │
+ ↓                     │
+F0 -> ноты/мелодия     │
+ ↓                     │
+Ukrainian DiffSinger <-┘ + lyrics.txt
  ↓
-ACE-Step 1.5
+украинский guide vocal
  ↓
 Seed-VC
  ↓
-FFmpeg
+оригинальный instrumental
  ↓
-готовый MP3
+final MP3
 ```
 
-Текст из TXT программа **не переписывает**.
+ACE-Step в украинской ветке v7 больше не используется.
 
-## Что поддерживается
+## 5. Поддержка GPU
 
-- Windows
-- NVIDIA CUDA
-- RTX 50-series / CUDA 12.8
-- **GeForce RTX 3080 10/12 GB (Ampere, sm_86)** — отдельный профиль
-- **GeForce GTX 970 4 GB (Maxwell)** — отдельный legacy/low-VRAM профиль
-- один или несколько MP3
-- вход: MP3
-- текст: UTF-8 TXT
-- референс: WAV
-- выход: MP3 320 kbps
-- Demucs `htdemucs`
-- ACE-Step 1.5
-- Seed-VC
-- метки `[Verse]`, `[Verse 1]`, `[Chorus]`
-- язык нового вокала задаётся через `vocal_language` в `config.json`
+- RTX 5080 / современные NVIDIA — полный режим.
+- RTX 3080 10/12 GB — поддерживается.
+- GTX 970 4 GB — отдельный low-VRAM профиль; Whisper работает на CPU, качество/шаги снижены автоматически.
 
-## Batch-настройки
+## 6. Референс голоса
 
-В `config.json`:
+Опционально:
 
-- `batch_stop_on_error: false` — если один трек упал, продолжать остальные.
-- `batch_shared_lyrics: false` — в batch по умолчанию нужен отдельный TXT для каждого MP3.
-- Если поставить `batch_shared_lyrics: true`, один `input/lyrics.txt` будет использоваться для всех MP3.
+```text
+input/reference.wav
+```
 
-## Если ошибка
+или для batch:
 
-Запустить:
+```text
+input/reference/song1.wav
+input/reference/song2.wav
+```
+
+Если reference отсутствует, он автоматически берётся из оригинального vocal stem.
+
+## 7. Дополнительный финальный припев
+
+По умолчанию:
+
+```json
+"append_final_repeated_section": true
+```
+
+Если в твоём тексте есть дополнительный последний `[Chorus]`, v7 повторит мелодию и музыкальный участок предыдущего припева вместо попытки впихнуть текст в outro.
+
+## 8. Если ошибка
+
+Запусти:
 
 ```text
 DIAGNOSE.bat
 ```
 
-Логи:
+И пришли:
 
 ```text
-logs/diagnose.log
-logs/run.log
 logs/setup.log
-logs/demucs.log
-logs/ace_api.log
+logs/run.log
+logs/asr.log
+logs/melody.log
+logs/diffsinger.log
 logs/seed_vc.log
 logs/ffmpeg.log
+logs/diagnose.log
 ```
 
-`SETUP_ONLY.bat` — проверка окружения.
-
-`FORCE_REPAIR.bat` — принудительный ремонт зависимостей.
-
-## Первый запуск
-
-Первый запуск требует Интернет для скачивания репозиториев, Python-пакетов и моделей. После установки основная работа выполняется локально.
-
-
-## GTX 970 / 4 GB VRAM
-
-GTX 970 определяется автоматически.
-
-Для неё программа включает отдельный профиль:
-
-- Maxwell `sm_52`
-- legacy PyTorch + CUDA 12.1 вместо CUDA 12.8
-- ACE-Step Tier-1 / DiT-only
-- INT8 + CPU offload в ACE-Step
-- batch size = 1
-- сокращённый voice reference (по умолчанию до 12 с)
-- Seed-VC: меньше diffusion steps (по умолчанию максимум 20)
-- ACE-Step полностью выгружается перед Seed-VC, чтобы модели не занимали VRAM одновременно
-- Demucs при ошибке CUDA автоматически повторяется на CPU
-
-На GTX 970 обработка будет существенно медленнее, чем на современной RTX, но режим рассчитан именно на 4 ГБ VRAM.
-
-Проверить, какой профиль выбран:
-
-```text
-DIAGNOSE.bat
-```
-
-В `logs/diagnose.log` будут GPU, compute capability, список CUDA-архитектур PyTorch и активный `gpu_profile.json`.
-
-
-## RTX 3080 / 10-12 GB VRAM
-
-RTX 3080 определяется автоматически.
-
-Для неё используется профиль `ampere_rtx3080`:
-
-- Ampere `sm_86`
-- PyTorch 2.7.1 + CUDA 12.8
-- ACE-Step использует свой VRAM tier по фактическому объёму карты
-- batch size = 1
-- ACE-Step выгружается перед Seed-VC
-- `MAX_CUDA_VRAM` передаётся ACE-Step по фактическому объёму VRAM (10 или 12 ГБ)
-- lazy CUDA module loading
-- более безопасный allocator profile для снижения фрагментации VRAM
-
-Это позволяет одной и той же папке проекта работать и на RTX 3080, и на RTX 5080, и на GTX 970 — setup проверяет архитектуру установленной карты и нужную сборку PyTorch.
-
-
-## Качество v5
-
-По умолчанию включён профиль `high`:
-
-- ACE получает полный исходный MP3 как Cover source.
-- `cover_strength = 1.0`.
-- `cover_noise_strength = 0.25` — удержание исходной мелодии.
-- После ACE запускается дополнительный Demucs и из результата берётся только vocal stem.
-- Seed-VC на обычных GPU использует 50 diffusion steps.
-- Старые ACE guides, созданные с другими настройками, автоматически не переиспользуются.
-
-Промежуточные файлы для диагностики остаются в:
-
-```text
-work/<трек>/ace_guides/
-work/<трек>/ace_vocals/
-work/<трек>/seed_vc/
-```
-
-Если снова слышны артефакты, сравни `ace_vocals/guide_vocal_01.wav` и `seed_vc/converted_01.wav`: так сразу видно, на каком именно этапе они появились.
-
-
-## v6: Strict Ukrainian
-
-Для украинского по умолчанию включён `quality_profile: "strict"`.
-
-Что изменилось:
-
-- ACE-Step больше не получает русскоязычный voice-reference. Он нужен только Seed-VC.
-- Cover source = instrumental + сильно приглушённый/low-pass исходный вокал. Мелодия и ритм остаются, разборчивые русские согласные подавляются.
-- На RTX 5080/достаточно мощной карте используется `acestep-v15-sft`, 50 steps + CFG.
-- На GTX 970 автоматически остаётся Turbo-профиль.
-- Seed-VC reference ограничен примерно 8 сек вместо 22 сек — меньше стыков и артефактов на длинной песне.
-- Исходный TXT не меняется. Для синтеза только удаляются невидимые Unicode-символы и отдельная латинская `I` трактуется как украинская `І`.
-
-В `out/` теперь появляются два полезных файла:
-
-```text
-song_uk_guide.mp3   # до Seed-VC
-song_uk.mp3         # после Seed-VC
-```
-
-Если `*_guide.mp3` уже говорит с неправильным акцентом — проблема в ACE.
-Если guide хороший, а финальный файл испорчен — проблема в Seed-VC.
-
-Первый запуск SFT может дополнительно скачать примерно 4.79 GB модели. После этого модель используется локально.
+Первый запуск скачивает модели и voicebank. Последующие запуски используют локальный cache.
