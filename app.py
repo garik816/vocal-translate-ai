@@ -43,7 +43,7 @@ def main() -> int:
         except Exception as exc:
             jobs.append((original, exc))
 
-    log("=== Vocal Translate AI v5 quality batch ===")
+    log("=== Vocal Translate AI v6 strict quality batch ===")
     log(f"Tracks found: {len(originals)}")
 
     for original, item in jobs:
@@ -66,7 +66,7 @@ def main() -> int:
 
     try:
         if not release_between:
-            proc, started = start_ace_server(port)
+            proc, started = start_ace_server(port, str(cfg.get("ace_model", "acestep-v15-turbo")))
 
         for index, (original, lyrics) in enumerate(valid_jobs, 1):
             log("")
@@ -80,13 +80,22 @@ def main() -> int:
                     original, cfg, ffmpeg
                 )
 
-                source_mode = str(cfg.get("ace_source_mode", "full_mix")).lower()
-                ace_source = original if source_mode == "full_mix" else stems["vocals"]
+                source_mode = str(cfg.get("ace_source_mode", "delexicalized_mix")).lower()
+                if source_mode == "full_mix":
+                    ace_source = original
+                elif source_mode == "vocals":
+                    ace_source = stems["vocals"]
+                elif source_mode == "delexicalized_mix":
+                    ace_source = audio.build_cover_source(
+                        stems, instrumental, track_work, ffmpeg, cfg
+                    )
+                else:
+                    raise RuntimeError(f"Unknown ace_source_mode: {source_mode}")
                 log(f"[ACE] Source mode: {source_mode} -> {ace_source.name}")
 
                 if release_between:
                     log("[GPU] Starting ACE only for guide generation...")
-                    proc, started = start_ace_server(port)
+                    proc, started = start_ace_server(port, str(cfg.get("ace_model", "acestep-v15-turbo")))
 
                 guides = ace.generate(
                     cfg, base_url, ace_source, reference, lyrics, track_work
@@ -99,6 +108,12 @@ def main() -> int:
                     started = False
 
                 clean_guides = audio.isolate_guide_vocals(guides, track_work, cfg)
+
+                if cfg.get("write_guide_preview", True) and clean_guides:
+                    audio.render_guide_preview(
+                        cfg, original, instrumental, clean_guides[0],
+                        track_work, ffmpeg, OUT_DIR
+                    )
 
                 converted = seed.convert(cfg, clean_guides, reference, track_work)
 
