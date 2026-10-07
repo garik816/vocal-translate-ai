@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import LOG_DIR, SEED_DIR, child_env, log, require, run_logged, seed_python
+from .gpu import seed_environment_overrides
 
 
 def convert(cfg: dict[str, Any], guides: list[Path], reference: Path,
@@ -18,6 +19,7 @@ def convert(cfg: dict[str, Any], guides: list[Path], reference: Path,
     env = child_env()
     env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+    env.update(seed_environment_overrides())
     outputs: list[Path] = []
     for index, guide in enumerate(guides, 1):
         work = converted_dir / f"candidate_{index:02d}"
