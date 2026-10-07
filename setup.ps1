@@ -130,6 +130,7 @@ try {
         'modern'
     }
 
+    $ReleaseBetweenStages = ($GpuMemoryMb -gt 0 -and $GpuMemoryMb -le 18432)
     $GpuProfile = [ordered]@{
         profile = $GpuProfileName
         name = $GpuName
@@ -137,7 +138,7 @@ try {
         legacy_torch = [bool]$LegacyGtx970
         low_vram = [bool]$LowVram
         rtx3080 = [bool]$Rtx3080
-        release_between_stages = [bool]($Rtx3080 -or $LowVram)
+        release_between_stages = [bool]$ReleaseBetweenStages
     }
     $GpuProfile | ConvertTo-Json | Set-Content -Path (Join-Path $Runtime 'gpu_profile.json') -Encoding UTF8
     Write-Host "[GPU] $GpuName / $GpuMemoryMb MB / profile=$GpuProfileName"
