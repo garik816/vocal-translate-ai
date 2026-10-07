@@ -1,30 +1,150 @@
 from __future__ import annotations
 
+import argparse
+import shutil
 import sys
 import traceback
+from pathlib import Path
 
-from vta import ace, audio, seed
+from vta import asr, audio, diffsinger, melody, seed
 from vta.common import (
-    ACE_DIR, LOG_DIR, OUT_DIR, RUN_LOG, SEED_DIR, WORK_DIR,
-    find_ffmpeg, find_input_mp3s, find_lyrics_for,
-    load_config, log, require,
+    LOG_DIR,
+    OUT_DIR,
+    RUN_LOG,
+    SEED_DIR,
+    WORK_DIR,
+    find_ffmpeg,
+    find_input_mp3s,
+    find_lyrics_for,
+    load_config,
+    log,
+    require,
 )
 from vta.gpu import apply_gpu_profile
-from vta.net import start_ace_server, stop_process_tree
 
 
-def prepare_track(original, cfg, ffmpeg):
+def export_source_lyrics(original: Path, track_work: Path) -> None:
+    src = track_work / "source_lyrics"
+    if not src.exists():
+        return
+    mapping = {
+        "lyrics_source.txt": OUT_DIR / f"{original.stem}_source_lyrics.txt",
+        "lyrics_source.srt": OUT_DIR / f"{original.stem}_source_lyrics.srt",
+        "lyrics_source.json": OUT_DIR / f"{original.stem}_source_lyrics.json",
+    }
+    for name, dst in mapping.items():
+        path = src / name
+        if path.exists():
+            shutil.copy2(path, dst)
+
+
+def process_track(
+    original: Path,
+    cfg: dict,
+    ffmpeg: str,
+    total_tracks: int,
+    extract_only: bool,
+) -> list[Path]:
     track_work = WORK_DIR / original.stem
     track_work.mkdir(parents=True, exist_ok=True)
+
+    log("")
+    log("=" * 72)
+    log(f"TRACK: {original.name}")
+    log("=" * 72)
+
     stems = audio.run_demucs(original, track_work, cfg)
+    source_asr = asr.extract_source_lyrics(
+        cfg=cfg,
+        original=original,
+        vocals=stems["vocals"],
+        track_work=track_work,
+    )
+    if cfg.get("export_source_lyrics", True):
+        export_source_lyrics(original, track_work)
+
+    if extract_only:
+        log("[Mode] Source-lyrics extraction complete; synthesis skipped.")
+        return []
+
+    lyrics = find_lyrics_for(original, cfg, total_tracks)
+    log(f"[Lyrics] Target: {lyrics}")
+
     instrumental = audio.build_instrumental(stems, track_work, ffmpeg)
     reference = audio.build_reference(
         stems["vocals"], track_work, ffmpeg, cfg, original
     )
-    return track_work, stems, instrumental, reference
+
+    melody_data = melody.extract_melody(
+        cfg=cfg,
+        vocals=stems["vocals"],
+        track_work=track_work,
+    )
+
+    guide, repeat_plan = diffsinger.render_ukrainian_guide(
+        cfg=cfg,
+        lyrics_path=lyrics,
+        melody=melody_data,
+        asr=source_asr,
+        track_work=track_work,
+    )
+
+    final_instrumental = audio.extend_instrumental_for_repeat(
+        instrumental=instrumental,
+        repeat_plan=repeat_plan,
+        track_work=track_work,
+        ffmpeg=ffmpeg,
+    )
+
+    if cfg.get("write_guide_preview", True):
+        audio.render_guide_preview(
+            cfg,
+            original,
+            final_instrumental,
+            guide,
+            track_work,
+            ffmpeg,
+            OUT_DIR,
+        )
+
+    if cfg.get("seed_vc_enabled", True):
+        converted = seed.convert(
+            cfg=cfg,
+            guides=[guide],
+            reference=reference,
+            track_work=track_work,
+        )
+        return audio.render_final(
+            cfg,
+            original,
+            final_instrumental,
+            converted,
+            track_work,
+            ffmpeg,
+            OUT_DIR,
+        )
+
+    log("[Seed-VC] Disabled; final output uses the DiffSinger guide timbre.")
+    return audio.render_final(
+        cfg,
+        original,
+        final_instrumental,
+        [guide],
+        track_work,
+        ffmpeg,
+        OUT_DIR,
+    )
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help="Only extract source lyrics/timings from input MP3 files.",
+    )
+    args = parser.parse_args()
+
     for path in (LOG_DIR, OUT_DIR, WORK_DIR):
         path.mkdir(parents=True, exist_ok=True)
     RUN_LOG.write_text("", encoding="utf-8")
@@ -32,132 +152,48 @@ def main() -> int:
     cfg = apply_gpu_profile(load_config())
     originals = find_input_mp3s()
     ffmpeg = find_ffmpeg()
-    require(ACE_DIR, "ACE-Step runtime")
     require(SEED_DIR, "Seed-VC runtime")
 
-    jobs = []
-    for original in originals:
-        try:
-            lyrics = find_lyrics_for(original, cfg, len(originals))
-            jobs.append((original, lyrics))
-        except Exception as exc:
-            jobs.append((original, exc))
-
-    log("=== Vocal Translate AI v6 strict quality batch ===")
+    log("=== Vocal Translate AI v7: Ukrainian DiffSinger ===")
     log(f"Tracks found: {len(originals)}")
+    log(f"Mode: {'extract-only' if args.extract_only else 'full pipeline'}")
 
-    for original, item in jobs:
-        if isinstance(item, Exception):
-            log(f"  SKIP {original.name}: {item}")
-        else:
-            log(f"  OK   {original.name} -> {item.name}")
+    successes: list[tuple[Path, list[Path]]] = []
+    failures: list[tuple[Path, Exception]] = []
 
-    valid_jobs = [(a, b) for a, b in jobs if not isinstance(b, Exception)]
-    if not valid_jobs:
-        raise RuntimeError("No valid jobs. Check MP3 names and matching lyric files.")
-
-    port = int(cfg.get("api_port", 8001))
-    base_url = f"http://127.0.0.1:{port}"
-    release_between = bool(cfg.get("_release_gpu_between_stages", False))
-    proc = None
-    started = False
-    successes = []
-    failures = []
-
-    try:
-        if not release_between:
-            proc, started = start_ace_server(port, str(cfg.get("ace_model", "acestep-v15-turbo")))
-
-        for index, (original, lyrics) in enumerate(valid_jobs, 1):
-            log("")
-            log("=" * 68)
-            log(f"[{index}/{len(valid_jobs)}] TRACK: {original.name}")
-            log(f"Lyrics: {lyrics}")
-            log("=" * 68)
-
-            try:
-                track_work, stems, instrumental, reference = prepare_track(
-                    original, cfg, ffmpeg
-                )
-
-                source_mode = str(cfg.get("ace_source_mode", "delexicalized_mix")).lower()
-                if source_mode == "full_mix":
-                    ace_source = original
-                elif source_mode == "vocals":
-                    ace_source = stems["vocals"]
-                elif source_mode == "delexicalized_mix":
-                    ace_source = audio.build_cover_source(
-                        stems, instrumental, track_work, ffmpeg, cfg
-                    )
-                else:
-                    raise RuntimeError(f"Unknown ace_source_mode: {source_mode}")
-                log(f"[ACE] Source mode: {source_mode} -> {ace_source.name}")
-
-                if release_between:
-                    log("[GPU] Starting ACE only for guide generation...")
-                    proc, started = start_ace_server(port, str(cfg.get("ace_model", "acestep-v15-turbo")))
-
-                guides = ace.generate(
-                    cfg, base_url, ace_source, reference, lyrics, track_work
-                )
-
-                if release_between and started:
-                    log("[GPU] Releasing ACE-Step VRAM before cleanup / Seed-VC...")
-                    stop_process_tree(proc)
-                    proc = None
-                    started = False
-
-                clean_guides = audio.isolate_guide_vocals(guides, track_work, cfg)
-
-                if cfg.get("write_guide_preview", True) and clean_guides:
-                    audio.render_guide_preview(
-                        cfg, original, instrumental, clean_guides[0],
-                        track_work, ffmpeg, OUT_DIR
-                    )
-
-                converted = seed.convert(cfg, clean_guides, reference, track_work)
-
-                outputs = audio.render_final(
-                    cfg, original, instrumental, converted,
-                    track_work, ffmpeg, OUT_DIR
-                )
-                successes.append((original, outputs))
-
-            except Exception as exc:
-                failures.append((original, exc))
-                log(f"TRACK FAILED: {original.name}: {exc}")
-
-                if release_between and started:
-                    stop_process_tree(proc)
-                    proc = None
-                    started = False
-
-                if cfg.get("batch_stop_on_error", False):
-                    raise
-
-    finally:
-        if started:
-            stop_process_tree(proc)
+    for index, original in enumerate(originals, 1):
+        log(f"\n[{index}/{len(originals)}] {original.name}")
+        try:
+            outputs = process_track(
+                original=original,
+                cfg=cfg,
+                ffmpeg=ffmpeg,
+                total_tracks=len(originals),
+                extract_only=args.extract_only,
+            )
+            successes.append((original, outputs))
+        except Exception as exc:
+            failures.append((original, exc))
+            log(f"TRACK FAILED: {original.name}: {exc}")
+            if cfg.get("batch_stop_on_error", False):
+                raise
 
     log("\n=== BATCH SUMMARY ===")
     for original, outputs in successes:
-        for output in outputs:
-            log(f"OK:   {original.name} -> {output.name}")
+        if args.extract_only:
+            log(f"OK:   {original.name} -> source lyrics exported")
+        else:
+            for output in outputs:
+                log(f"OK:   {original.name} -> {output.name}")
     for original, exc in failures:
         log(f"FAIL: {original.name} -> {exc}")
 
-    skipped = [(a, b) for a, b in jobs if isinstance(b, Exception)]
-    for original, exc in skipped:
-        log(f"SKIP: {original.name} -> {exc}")
-
-    if failures or skipped:
-        log(
-            f"Completed with issues: {len(successes)} success, "
-            f"{len(failures)} failed, {len(skipped)} skipped."
-        )
-        return 2 if not successes else 0
-
-    log(f"Completed successfully: {len(successes)} track(s).")
+    if failures and not successes:
+        return 2
+    if failures:
+        log(f"Completed with issues: {len(successes)} success, {len(failures)} failed.")
+    else:
+        log(f"Completed successfully: {len(successes)} track(s).")
     return 0
 
 
