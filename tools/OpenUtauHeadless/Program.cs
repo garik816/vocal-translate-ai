@@ -257,6 +257,13 @@ static class Program {
     }
 
     public static int Main(string[] args) {
+        // OpenUtau's real GUI entry point registers legacy code pages before
+        // loading any singer metadata. VoicebankLoader defaults character.txt
+        // to Shift-JIS; without this provider .NET throws internally and the
+        // singer is silently dropped from SearchAll().
+        System.Text.Encoding.RegisterProvider(
+            System.Text.CodePagesEncodingProvider.Instance);
+
         var context = new PumpSynchronizationContext();
         SynchronizationContext.SetSynchronizationContext(context);
         var scheduler =
