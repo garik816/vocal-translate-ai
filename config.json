@@ -9,12 +9,12 @@
   "reuse_demucs": true,
   "reference_seconds": 22,
   "reference_silence_threshold": "-45dB",
-  "caption": "male baritone rock vocal, dark post-punk delivery, dry isolated lead vocal, no instruments, no accompaniment, no backing vocals, preserve the source melody, rhythm, phrasing and timing",
+  "caption": "faithful cover of the source song, preserve the original melody, rhythm, tempo, phrasing, arrangement and section timing; male baritone lead vocal; use only the supplied lyrics; no invented words, no skipped lyric lines, no extra vocals, no humming, no ad-libs",
   "ace_model": "acestep-v15-turbo",
-  "cover_strength": 0.88,
+  "cover_strength": 1,
   "ace_inference_steps": 8,
   "ace_batch_size": 1,
-  "seed_vc_diffusion_steps": 30,
+  "seed_vc_diffusion_steps": 50,
   "seed_vc_cfg_rate": 0.7,
   "seed_vc_pitch_shift": 0,
   "mix_vocal_gain_db": 0,
@@ -24,5 +24,10 @@
   "low_vram_reference_seconds": 12,
   "low_vram_seed_vc_diffusion_steps": 20,
   "release_gpu_between_stages": false,
-  "reuse_ace_guides": true
+  "reuse_ace_guides": true,
+  "quality_profile": "high",
+  "ace_source_mode": "full_mix",
+  "cover_noise_strength": 0.25,
+  "post_ace_demucs": true,
+  "reuse_post_ace_demucs": true
 }
