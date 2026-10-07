@@ -7,3 +7,5 @@ einops==0.8.0
 transformers==4.46.3
 soundfile==0.12.1
 pyyaml
+descript-audio-codec==1.0.0
+hf_xet
