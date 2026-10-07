@@ -47,7 +47,11 @@ def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         f"VRAM={memory_mb} MB"
     )
 
+    quality = str(cfg.get("quality_profile", "high")).lower()
+
     if low_vram:
+        cfg["ace_model"] = "acestep-v15-turbo"
+        cfg["ace_inference_steps"] = min(int(cfg.get("ace_inference_steps", 8)), 8)
         cfg["ace_batch_size"] = 1
         cfg["reference_seconds"] = min(
             int(cfg.get("reference_seconds", 22)),
@@ -63,6 +67,12 @@ def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             "short reference, reduced Seed-VC steps, release VRAM between stages."
         )
     elif is_rtx3080:
+        if quality in {"high", "strict"} and memory_mb >= 11264:
+            cfg["ace_model"] = "acestep-v15-sft"
+            cfg["ace_inference_steps"] = 50
+        else:
+            cfg["ace_model"] = "acestep-v15-turbo"
+            cfg["ace_inference_steps"] = min(int(cfg.get("ace_inference_steps", 8)), 12)
         cfg["ace_batch_size"] = min(int(cfg.get("ace_batch_size", 1)), 1)
         cfg["_release_gpu_between_stages"] = True
         log(
@@ -70,6 +80,10 @@ def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             "release ACE VRAM before Seed-VC."
         )
     elif release_between:
+        if quality in {"high", "strict"} and memory_mb >= 14336:
+            cfg["ace_model"] = "acestep-v15-sft"
+            cfg["ace_inference_steps"] = 50
+            log("[GPU] Quality mode: using ACE-Step SFT, 50 steps + CFG.")
         cfg["_release_gpu_between_stages"] = True
         log(
             "[GPU] Shared-VRAM safety: release ACE-Step before Seed-VC "
