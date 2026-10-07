@@ -6,11 +6,16 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Runtime = Join-Path $Root 'runtime'
 $Logs = Join-Path $Root 'logs'
-$Ace = Join-Path $Runtime 'ACE-Step-1.5'
+$Downloads = Join-Path $Runtime 'downloads'
 $Seed = Join-Path $Runtime 'seed-vc'
 $SeedReq = Join-Path $Root 'seedvc_inference_requirements.txt'
+$OpenUtau = Join-Path $Runtime 'OpenUtau-lunai'
+$DiffSingerRoot = Join-Path $Runtime 'diffsinger'
+$HeadlessProject = Join-Path $Root 'tools\OpenUtauHeadless\OpenUtauHeadless.csproj'
+$HeadlessDll = Join-Path $Root 'tools\OpenUtauHeadless\bin\Release\net10.0\OpenUtauHeadless.dll'
 
-New-Item -ItemType Directory -Force -Path $Runtime, $Logs | Out-Null
+New-Item -ItemType Directory -Force -Path $Runtime, $Logs, $Downloads, $DiffSingerRoot | Out-Null
+
 $TranscriptStarted = $false
 try {
     Start-Transcript -Path (Join-Path $Logs 'setup.log') -Append -ErrorAction Stop | Out-Null
@@ -24,7 +29,8 @@ function Refresh-Path {
     $extra = @(
         "$env:USERPROFILE\.local\bin",
         "$env:LOCALAPPDATA\Microsoft\WinGet\Links",
-        'C:\Program Files\Git\cmd'
+        'C:\Program Files\Git\cmd',
+        'C:\Program Files\dotnet'
     ) -join ';'
     $env:Path = "$machine;$user;$extra;$env:Path"
 }
@@ -45,7 +51,7 @@ function Invoke-UvArgs([string[]]$UvArgs, [int]$Retries = 3) {
         }
         if ($i -lt $Retries) {
             Write-Warning "uv command failed (attempt $i/$Retries). Retrying..."
-            Start-Sleep -Seconds (3 * $i)
+            Start-Sleep -Seconds (4 * $i)
         }
     }
     throw "uv command failed after $Retries attempts: uv $($UvArgs -join ' ')"
@@ -53,10 +59,8 @@ function Invoke-UvArgs([string[]]$UvArgs, [int]$Retries = 3) {
 
 function Try-UvArgs([string[]]$UvArgs) {
     if (-not $UvArgs -or $UvArgs.Count -eq 0) {
-        Write-Warning 'Try-UvArgs received an empty argument list.'
         return $false
     }
-    Write-Host "uv $($UvArgs -join ' ')"
     & uv @UvArgs
     return ($LASTEXITCODE -eq 0)
 }
@@ -74,7 +78,7 @@ function Ensure-WingetPackage([string]$CommandName, [string]$PackageId) {
         return
     }
     if (-not (Has-Command 'winget')) {
-        throw "$CommandName is missing and winget is unavailable. Install $CommandName manually, then run SETUP_ONLY.bat."
+        throw "$CommandName is missing and winget is unavailable. Install $CommandName manually."
     }
     Write-Host "Installing $PackageId..."
     & winget install --id $PackageId -e --accept-package-agreements --accept-source-agreements
@@ -82,14 +86,53 @@ function Ensure-WingetPackage([string]$CommandName, [string]$PackageId) {
         throw "winget failed to install $PackageId"
     }
     Refresh-Path
-    if (-not (Has-Command $CommandName)) {
-        throw "$PackageId was installed but $CommandName is still not visible in PATH. Restart RUN.bat."
+}
+
+function Ensure-DotNet10 {
+    $have10 = $false
+    if (Has-Command 'dotnet') {
+        try {
+            $have10 = [bool]((& dotnet --list-sdks) | Select-String -Pattern '^10\.')
+        } catch {
+            $have10 = $false
+        }
+    }
+    if ($have10) {
+        return
+    }
+    if (-not (Has-Command 'winget')) {
+        throw '.NET 10 SDK is required for the OpenUtau headless renderer.'
+    }
+    Write-Host 'Installing .NET 10 SDK...'
+    & winget install --id Microsoft.DotNet.SDK.10 -e --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to install .NET 10 SDK.'
+    }
+    Refresh-Path
+    $have10 = [bool]((& dotnet --list-sdks) | Select-String -Pattern '^10\.')
+    if (-not $have10) {
+        throw '.NET 10 SDK was installed but is not visible yet. Restart RUN.bat.'
     }
 }
 
+function Download-File([string]$Url, [string]$Destination) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+    if (Has-Command 'curl.exe') {
+        Write-Host "Downloading: $Url"
+        & curl.exe -L --fail --retry 5 --retry-delay 5 -C - -o $Destination $Url
+        if ($LASTEXITCODE -ne 0) {
+            throw "Download failed: $Url"
+        }
+        return
+    }
+    Write-Host "Downloading with Invoke-WebRequest: $Url"
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+}
+
 try {
-    Write-Host '=== Vocal Translate AI v4: setup / verify ==='
+    Write-Host '=== Vocal Translate AI v7: setup / verify ==='
     Refresh-Path
+
     $env:UV_HTTP_TIMEOUT = '180'
     $env:UV_HTTP_RETRIES = '5'
     $env:PYTHONUTF8 = '1'
@@ -98,8 +141,9 @@ try {
     Ensure-WingetPackage 'git' 'Git.Git'
     Ensure-WingetPackage 'uv' 'astral-sh.uv'
     Ensure-WingetPackage 'ffmpeg' 'Gyan.FFmpeg'
+    Ensure-DotNet10
 
-    # Detect GPU before choosing PyTorch builds.
+    # GPU detection.
     $GpuName = 'unknown'
     $GpuMemoryMb = 0
     if (Has-Command 'nvidia-smi') {
@@ -130,7 +174,6 @@ try {
         'modern'
     }
 
-    $ReleaseBetweenStages = ($GpuMemoryMb -gt 0 -and $GpuMemoryMb -le 18432)
     $GpuProfile = [ordered]@{
         profile = $GpuProfileName
         name = $GpuName
@@ -138,74 +181,14 @@ try {
         legacy_torch = [bool]$LegacyGtx970
         low_vram = [bool]$LowVram
         rtx3080 = [bool]$Rtx3080
-        release_between_stages = [bool]$ReleaseBetweenStages
     }
     $GpuProfile | ConvertTo-Json | Set-Content -Path (Join-Path $Runtime 'gpu_profile.json') -Encoding UTF8
     Write-Host "[GPU] $GpuName / $GpuMemoryMb MB / profile=$GpuProfileName"
 
-    if (-not (Test-Path (Join-Path $Ace '.git'))) {
-        Write-Host '[ACE-Step] Cloning repository...'
-        & git clone https://github.com/ACE-Step/ACE-Step-1.5.git $Ace
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Failed to clone ACE-Step.'
-        }
-    } else {
-        Write-Host '[ACE-Step] Existing repository found. No automatic git pull.'
-    }
-
-    $AcePython = Join-Path $Ace '.venv\Scripts\python.exe'
-    if ($LegacyGtx970) {
-        $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA:',torch.cuda.is_available())"
-    } elseif ($Rtx3080) {
-        $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA build:',torch.version.cuda); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (8, 6); assert 'sm_86' in torch.cuda.get_arch_list(); assert torch.__version__.startswith('2.7.1'); assert torch.version.cuda == '12.8'"
-    } else {
-        $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA:',torch.cuda.is_available()); cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('ACE device arch:',arch); print('ACE wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert (not torch.cuda.is_available()) or arch in torch.cuda.get_arch_list()"
-    }
-    if ($ForceRepair -or -not $AceOk) {
-        Write-Host '[ACE-Step] Creating/repairing environment WITHOUT flash-attn...'
-        Push-Location $Ace
-        try {
-            Invoke-UvArgs @('sync', '--frozen', '--no-install-package', 'flash-attn') 3
-        } finally {
-            Pop-Location
-        }
-    } else {
-        Write-Host '[ACE-Step] Environment OK. Skipping uv sync.'
-    }
-
-    if ($LegacyGtx970) {
-        $AceLegacyOk = Test-Python $AcePython "import torch; print('ACE capability:', torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None); print('ACE arches:', torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (5, 2); assert 'sm_52' in torch.cuda.get_arch_list()"
-        if ($ForceRepair -or -not $AceLegacyOk) {
-            Write-Host '[ACE-Step] GTX 970 detected: installing legacy CUDA 12.1 PyTorch with Maxwell support...'
-            Invoke-UvArgs @(
-                'pip', 'install', '--python', $AcePython, '--force-reinstall',
-                '--index-url', 'https://download.pytorch.org/whl/cu121',
-                'torch==2.5.1+cu121', 'torchvision==0.20.1+cu121', 'torchaudio==2.5.1+cu121'
-            ) 4
-            Write-Host '[ACE-Step] Installing legacy-compatible torchao for INT8 Tier-1 mode...'
-            Invoke-UvArgs @(
-                'pip', 'install', '--python', $AcePython, '--force-reinstall',
-                'torchao==0.11.0'
-            ) 4
-        } else {
-            Write-Host '[ACE-Step] GTX 970 legacy PyTorch is already compatible.'
-        }
-    }
-
-    if (-not (Test-Python $AcePython "import demucs; print('Demucs OK')")) {
-        Write-Host '[Demucs] Missing. Trying uv cache first...'
-        $offline = Try-UvArgs @('pip', 'install', '--offline', '--python', $AcePython, 'demucs==4.0.1')
-        if (-not $offline) {
-            Write-Host '[Demucs] Not in local cache. Installing from PyPI...'
-            Invoke-UvArgs @('pip', 'install', '--python', $AcePython, 'demucs==4.0.1') 4
-        }
-    } else {
-        Write-Host '[Demucs] Already installed.'
-    }
-
+    # Seed-VC is also the shared Python/CUDA environment for Demucs, Whisper and melody extraction.
     if (-not (Test-Path (Join-Path $Seed '.git'))) {
         Write-Host '[Seed-VC] Cloning repository...'
-        & git clone https://github.com/Plachtaa/seed-vc.git $Seed
+        & git clone --depth 1 https://github.com/Plachtaa/seed-vc.git $Seed
         if ($LASTEXITCODE -ne 0) {
             throw 'Failed to clone Seed-VC.'
         }
@@ -215,7 +198,8 @@ try {
 
     $SeedPython = Join-Path $Seed '.venv\Scripts\python.exe'
     if (-not (Test-Path $SeedPython)) {
-        Write-Host '[Seed-VC] Creating Python 3.10 environment...'
+        Write-Host '[Python] Installing managed Python 3.10 and creating venv...'
+        Invoke-UvArgs @('python', 'install', '3.10') 3
         & uv venv (Join-Path $Seed '.venv') --python 3.10
         if ($LASTEXITCODE -ne 0) {
             throw 'Failed to create Seed-VC venv.'
@@ -223,63 +207,91 @@ try {
     }
 
     if ($LegacyGtx970) {
-        $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:', torch.__version__); print('Seed CUDA:', torch.version.cuda); print('Seed capability:', torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None); print('Seed arches:', torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (5, 2); assert 'sm_52' in torch.cuda.get_arch_list()"
-        if ($ForceRepair -or -not $SeedTorchOk) {
-            Write-Host '[Seed-VC] GTX 970 detected: installing CUDA 12.1 legacy PyTorch...'
-            $legacySeedArgs = @(
+        $TorchOk = Test-Python $SeedPython "import torch; assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0)==(5,2); assert 'sm_52' in torch.cuda.get_arch_list()"
+        if ($ForceRepair -or -not $TorchOk) {
+            Write-Host '[PyTorch] GTX 970: installing CUDA 12.1 / Maxwell-compatible build...'
+            Invoke-UvArgs @(
                 'pip', 'install', '--python', $SeedPython, '--force-reinstall',
                 '--index-url', 'https://download.pytorch.org/whl/cu121',
                 'torch==2.5.1+cu121', 'torchvision==0.20.1+cu121', 'torchaudio==2.5.1+cu121'
-            )
-            Invoke-UvArgs $legacySeedArgs 4
-        } else {
-            Write-Host '[Seed-VC] GTX 970 legacy PyTorch already installed.'
+            ) 4
         }
     } else {
-        if ($Rtx3080) {
-            $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:',torch.__version__); print('Seed CUDA build:',torch.version.cuda); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (8, 6); assert 'sm_86' in torch.cuda.get_arch_list(); assert torch.__version__.startswith('2.7.1'); assert torch.version.cuda == '12.8'"
-        } else {
-            $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:',torch.__version__); print('Seed CUDA build:',torch.version.cuda); assert torch.version.cuda is not None; cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('Seed device arch:',arch); print('Seed wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert arch in torch.cuda.get_arch_list()"
-        }
-        if ($ForceRepair -or -not $SeedTorchOk) {
-            Write-Host '[Seed-VC] Installing CUDA 12.8 PyTorch. Trying uv cache first...'
-            $torchArgs = @(
-                'pip', 'install', '--python', $SeedPython,
+        $TorchOk = Test-Python $SeedPython "import torch; assert torch.cuda.is_available(); cap=torch.cuda.get_device_capability(0); arch=f'sm_{cap[0]}{cap[1]}'; assert arch in torch.cuda.get_arch_list(); assert torch.__version__.startswith('2.7.1'); assert torch.version.cuda=='12.8'"
+        if ($ForceRepair -or -not $TorchOk) {
+            Write-Host '[PyTorch] Installing CUDA 12.8 build...'
+            $offline = Try-UvArgs @(
+                'pip', 'install', '--offline', '--python', $SeedPython,
                 '--index-url', 'https://download.pytorch.org/whl/cu128',
                 'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128'
             )
-            $offlineTorch = @('pip', 'install', '--offline', '--python', $SeedPython, '--index-url', 'https://download.pytorch.org/whl/cu128', 'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128')
-            if (-not (Try-UvArgs $offlineTorch)) {
-                Invoke-UvArgs $torchArgs 4
+            if (-not $offline) {
+                Invoke-UvArgs @(
+                    'pip', 'install', '--python', $SeedPython,
+                    '--index-url', 'https://download.pytorch.org/whl/cu128',
+                    'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128'
+                ) 4
             }
-        } else {
-            Write-Host '[Seed-VC] PyTorch already installed. No download.'
         }
     }
 
-    $SeedImports = "import numpy, scipy, librosa, huggingface_hub, munch, einops, transformers, soundfile, yaml, dac; from dac.nn.quantize import VectorQuantize; print('Seed inference dependencies OK')"
-    $SeedDepsOk = Test-Python $SeedPython $SeedImports
-    if ($ForceRepair -or -not $SeedDepsOk) {
-        Write-Host '[Seed-VC] Installing minimal inference dependencies. Trying uv cache first...'
+    $RuntimeImports = "import numpy,scipy,librosa,huggingface_hub,munch,einops,transformers,soundfile,yaml,dac,demucs,whisper,mutagen; from dac.nn.quantize import VectorQuantize; print('v7 Python runtime OK')"
+    $DepsOk = Test-Python $SeedPython $RuntimeImports
+    if ($ForceRepair -or -not $DepsOk) {
+        Write-Host '[Python] Installing/repairing v7 inference dependencies...'
         $offlineDeps = @('pip', 'install', '--offline', '--python', $SeedPython, '-r', $SeedReq)
         if (-not (Try-UvArgs $offlineDeps)) {
             Invoke-UvArgs @('pip', 'install', '--python', $SeedPython, '-r', $SeedReq) 4
         }
-    } else {
-        Write-Host '[Seed-VC] Inference dependencies already installed.'
     }
 
-    if (-not (Test-Python $SeedPython $SeedImports)) {
-        throw 'Seed-VC dependency verification failed. See logs/setup.log.'
+    if (-not (Test-Python $SeedPython $RuntimeImports)) {
+        throw 'Python runtime verification failed. See logs\setup.log.'
     }
 
     if (-not (Test-Path (Join-Path $Seed 'inference.py'))) {
         throw 'Seed-VC inference.py is missing.'
     }
 
+    # OpenUtau-Lunai contains the Ukrainian DiffSinger phonemizer.
+    if (-not (Test-Path (Join-Path $OpenUtau '.git'))) {
+        Write-Host '[OpenUtau] Cloning OpenUtau-Lunai...'
+        & git clone --depth 1 https://github.com/keirokeer/OpenUtau-lunai.git $OpenUtau
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to clone OpenUtau-Lunai.'
+        }
+    } else {
+        Write-Host '[OpenUtau] Existing repository found. No automatic git pull.'
+    }
+
+    # Download one neutral male DiffSinger guide voice. Seed-VC replaces its timbre later.
+    $VoiceConfig = Get-ChildItem -Path $DiffSingerRoot -Recurse -Filter 'dsconfig.yaml' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($ForceRepair -or -not $VoiceConfig) {
+        $VoiceZip = Join-Path $Downloads 'Nero_v170.zip'
+        $VoiceUrl = 'https://github.com/lunaiproject/lunai_singers/releases/download/170/Nero_v170.zip'
+        if (-not (Test-Path $VoiceZip)) {
+            Write-Host '[DiffSinger] Downloading Nero v170 voicebank (~433 MB)...'
+            Download-File $VoiceUrl $VoiceZip
+        }
+        Write-Host '[DiffSinger] Extracting voicebank...'
+        Expand-Archive -LiteralPath $VoiceZip -DestinationPath $DiffSingerRoot -Force
+        $VoiceConfig = Get-ChildItem -Path $DiffSingerRoot -Recurse -Filter 'dsconfig.yaml' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $VoiceConfig) {
+            throw 'Nero voicebank was extracted but dsconfig.yaml was not found.'
+        }
+    }
+    Write-Host "[DiffSinger] Voicebank ready: $($VoiceConfig.DirectoryName)"
+
+    # Build the tiny console renderer against OpenUtau-Lunai Core.
+    Write-Host '[OpenUtau] Building headless renderer...'
+    & dotnet build $HeadlessProject -c Release --nologo
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $HeadlessDll)) {
+        throw 'Failed to build OpenUtau headless renderer.'
+    }
+
     Set-Content -Path (Join-Path $Runtime '.last_setup_ok') -Value (Get-Date -Format o) -Encoding ascii
     Write-Host ''
-    Write-Host 'SETUP / VERIFY COMPLETE.' -ForegroundColor Green
+    Write-Host 'V7 SETUP / VERIFY COMPLETE.' -ForegroundColor Green
     exit 0
 } catch {
     Write-Host ''
