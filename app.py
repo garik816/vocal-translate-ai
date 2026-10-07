@@ -7,27 +7,22 @@ from vta import ace, audio, seed
 from vta.common import (ACE_DIR, LOG_DIR, OUT_DIR, RUN_LOG, SEED_DIR, WORK_DIR,
                         find_ffmpeg, find_input_mp3s, find_lyrics_for,
                         load_config, log, require)
-from vta.net import start_ace_server, stop_process_tree
 from vta.gpu import apply_gpu_profile
+from vta.net import start_ace_server, stop_process_tree
 
 
-def process_track(original, lyrics, cfg, ffmpeg, base_url):
+def prepare_track(original, cfg, ffmpeg):
     track_work = WORK_DIR / original.stem
     track_work.mkdir(parents=True, exist_ok=True)
-    log("")
-    log("=" * 68)
-    log(f"TRACK: {original.name}")
-    log(f"Lyrics: {lyrics}")
-    log("=" * 68)
-
     stems = audio.run_demucs(original, track_work, cfg)
     instrumental = audio.build_instrumental(stems, track_work, ffmpeg)
     reference = audio.build_reference(
         stems["vocals"], track_work, ffmpeg, cfg, original
     )
-    guides = ace.generate(
-        cfg, base_url, stems["vocals"], reference, lyrics, track_work
-    )
+    return track_work, stems, instrumental, reference
+
+
+def finish_track(original, cfg, ffmpeg, track_work, instrumental, reference, guides):
     converted = seed.convert(cfg, guides, reference, track_work)
     return audio.render_final(
         cfg, original, instrumental, converted, track_work, ffmpeg, OUT_DIR
@@ -67,23 +62,60 @@ def main() -> int:
 
     port = int(cfg.get("api_port", 8001))
     base_url = f"http://127.0.0.1:{port}"
+    low_vram = bool(cfg.get("_release_gpu_between_stages", False))
     proc = None
     started = False
     successes = []
     failures = []
 
     try:
-        proc, started = start_ace_server(port)
+        if not low_vram:
+            proc, started = start_ace_server(port)
+
         for index, (original, lyrics) in enumerate(valid_jobs, 1):
-            log(f"\n[{index}/{len(valid_jobs)}] Starting {original.name}")
+            log("")
+            log("=" * 68)
+            log(f"[{index}/{len(valid_jobs)}] TRACK: {original.name}")
+            log(f"Lyrics: {lyrics}")
+            log("=" * 68)
+
             try:
-                outputs = process_track(original, lyrics, cfg, ffmpeg, base_url)
+                track_work, stems, instrumental, reference = prepare_track(
+                    original, cfg, ffmpeg
+                )
+
+                if low_vram:
+                    log("[GPU] Starting ACE only for guide generation...")
+                    proc, started = start_ace_server(port)
+
+                guides = ace.generate(
+                    cfg, base_url, stems["vocals"], reference, lyrics, track_work
+                )
+
+                if low_vram and started:
+                    log("[GPU] Releasing ACE-Step VRAM before Seed-VC...")
+                    stop_process_tree(proc)
+                    proc = None
+                    started = False
+
+                outputs = finish_track(
+                    original, cfg, ffmpeg, track_work,
+                    instrumental, reference, guides
+                )
                 successes.append((original, outputs))
+
             except Exception as exc:
                 failures.append((original, exc))
                 log(f"TRACK FAILED: {original.name}: {exc}")
+
+                if low_vram and started:
+                    stop_process_tree(proc)
+                    proc = None
+                    started = False
+
                 if cfg.get("batch_stop_on_error", False):
                     raise
+
     finally:
         if started:
             stop_process_tree(proc)
