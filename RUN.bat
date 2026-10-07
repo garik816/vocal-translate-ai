@@ -19,19 +19,13 @@ if %errorlevel%==0 (
 )
 
 %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-set "RC=%errorlevel%"
-if not "%RC%"=="0" goto :fail
+if errorlevel 1 goto :setup_fail
 
 set "PY=runtime\ACE-Step-1.5\.venv\Scripts\python.exe"
-if not exist "%PY%" (
-    echo ERROR: ACE-Step Python not found: %PY%
-    set "RC=20"
-    goto :fail
-)
+if not exist "%PY%" goto :python_fail
 
 "%PY%" "%~dp0app.py"
-set "RC=%errorlevel%"
-if not "%RC%"=="0" goto :fail
+if errorlevel 1 goto :pipeline_fail
 
 echo.
 echo ============================================================
@@ -41,19 +35,38 @@ echo [%date% %time%] RUN completed OK>>"logs\launcher.log"
 pause
 exit /b 0
 
-:fail
+:setup_fail
 echo.
 echo ============================================================
-echo FAILED. Exit code: %RC%
-echo Check these files:
-echo   logs\launcher.log
-echo   logs\setup.log
+echo FAILED during SETUP.
+echo Check logs\setup.log
+echo ============================================================
+echo [%date% %time%] RUN failed during SETUP>>"logs\launcher.log"
+pause
+exit /b 1
+
+:python_fail
+echo.
+echo ============================================================
+echo FAILED: ACE-Step Python environment was not created.
+echo Expected: %PY%
+echo Check logs\setup.log
+echo ============================================================
+echo [%date% %time%] RUN failed: ACE Python missing>>"logs\launcher.log"
+pause
+exit /b 20
+
+:pipeline_fail
+echo.
+echo ============================================================
+echo FAILED during PIPELINE.
+echo Check:
 echo   logs\run.log
 echo   logs\demucs.log
 echo   logs\ace_api.log
 echo   logs\seed_vc.log
 echo   logs\ffmpeg.log
 echo ============================================================
-echo [%date% %time%] RUN failed, code %RC%>>"logs\launcher.log"
+echo [%date% %time%] RUN failed during PIPELINE>>"logs\launcher.log"
 pause
-exit /b %RC%
+exit /b 1
