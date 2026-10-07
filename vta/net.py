@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import ACE_DIR, LOG_DIR, ROOT, ace_python, child_env, log, require, tail_text
+from .gpu import ace_environment_overrides
 
 
 def post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
@@ -71,6 +72,7 @@ def start_ace_server(port: int) -> tuple[subprocess.Popen[Any] | None, bool]:
     env = child_env()
     env["ACESTEP_INIT_LLM"] = "false"
     env["ACESTEP_CONFIG_PATH"] = "acestep-v15-turbo"
+    env.update(ace_environment_overrides())
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     log("[ACE] Starting API directly from existing venv (no uv sync)...")
     proc = subprocess.Popen(
