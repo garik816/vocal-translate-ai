@@ -40,6 +40,7 @@ def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     memory_mb = int(profile.get("memory_mb") or 0)
     low_vram = bool(profile.get("low_vram", False))
     is_rtx3080 = bool(profile.get("rtx3080", False))
+    release_between = bool(profile.get("release_between_stages", False))
 
     log(
         f"[GPU] {name} | profile={profile_name} | "
@@ -67,6 +68,12 @@ def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         log(
             "[GPU] RTX 3080 mode: modern CUDA profile, batch=1, "
             "release ACE VRAM before Seed-VC."
+        )
+    elif release_between:
+        cfg["_release_gpu_between_stages"] = True
+        log(
+            "[GPU] Shared-VRAM safety: release ACE-Step before Seed-VC "
+            "on this <=18GB GPU."
         )
     else:
         cfg["_release_gpu_between_stages"] = bool(
