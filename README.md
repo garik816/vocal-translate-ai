@@ -1,4 +1,4 @@
-# Vocal Translate AI v4
+# Vocal Translate AI v5
 
 > Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md)
 
@@ -8,16 +8,17 @@ Windows one-click local pipeline for translating a song vocal while preserving t
 
 ## Pipeline
 
-`input/original.mp3` -> Demucs -> ACE-Step 1.5 cover -> Seed-VC -> remix -> `out/original_uk.mp3`
+`input/original.mp3` -> Demucs -> ACE-Step 1.5 faithful cover -> Demucs vocal cleanup -> Seed-VC -> remix -> `out/original_uk.mp3`
 
 The default flow:
 
 1. Demucs `htdemucs` separates `bass.wav`, `drums.wav`, `other.wav`, and `vocals.wav`.
 2. The three non-vocal stems are mixed into an instrumental.
 3. A short target-voice reference is automatically created from the original vocal stem after trimming the leading silence.
-4. ACE-Step 1.5 uses the isolated original vocal as the cover structure and generates the translated sung vocal.
-5. Seed-VC converts the generated guide vocal toward the timbre of the original singer while preserving F0.
-6. FFmpeg mixes the converted vocal with the instrumental and writes a 320 kbps MP3 to `out/`.
+4. ACE-Step 1.5 uses the **full original mix** as the Cover source, so melody, rhythm, chords, arrangement and section timing are better constrained.
+5. The ACE result is separated again with Demucs `--two-stems vocals`; only the isolated generated vocal is passed to Seed-VC.
+6. Seed-VC converts that clean guide vocal toward the reference timbre while preserving F0.
+7. FFmpeg mixes the converted vocal with the original Demucs instrumental and writes a 320 kbps MP3 to `out/`.
 
 ## Input
 
@@ -37,7 +38,17 @@ The setup check runs every time but does not reinstall healthy environments. On 
 
 First-time setup needs Internet access for repositories, Python packages, and model weights. Later runs reuse local environments, package caches, and downloaded model weights.
 
-## Important reliability changes in v4
+## Quality changes in v5
+
+- `audio_cover_strength=1.0` by default for a faithful cover.
+- `cover_noise_strength=0.25` is now explicitly set. ACE-Step documents 0 as no melody retention; leaving it at the old default allowed excessive reinterpretation.
+- ACE source defaults to the full original mix instead of the isolated vocal stem.
+- ACE output is vocal-separated before Seed-VC to prevent instruments/noise from being converted into ghost vocals.
+- Seed-VC uses 50 diffusion steps on normal GPUs for higher SVC quality; low-VRAM GPU profiles still reduce this automatically.
+- FFmpeg limiters use `level=false`, so peak protection no longer auto-raises the backing track.
+- ACE guide caching now includes a generation fingerprint. Old/bad guides are automatically invalidated when quality parameters change.
+
+### Reliability retained from v4
 
 - ACE-Step is started directly from its existing `.venv`; the pipeline does not use `uv run`, so normal runs cannot trigger an implicit environment sync.
 - Existing ACE-Step and Seed-VC repositories are not automatically updated.
