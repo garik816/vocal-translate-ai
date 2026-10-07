@@ -92,6 +92,38 @@ try {
     Ensure-WingetPackage 'uv' 'astral-sh.uv'
     Ensure-WingetPackage 'ffmpeg' 'Gyan.FFmpeg'
 
+    # Detect GPU before choosing PyTorch builds.
+    $GpuName = 'unknown'
+    $GpuMemoryMb = 0
+    if (Has-Command 'nvidia-smi') {
+        try {
+            $gpuLine = (& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
+            if ($gpuLine) {
+                $parts = $gpuLine -split ','
+                $GpuName = $parts[0].Trim()
+                if ($parts.Count -gt 1) {
+                    [int]::TryParse($parts[1].Trim(), [ref]$GpuMemoryMb) | Out-Null
+                }
+            }
+        } catch {
+            Write-Warning "GPU detection failed: $($_.Exception.Message)"
+        }
+    }
+
+    $LegacyGtx970 = $GpuName -match 'GTX\s*970'
+    $LowVram = ($GpuMemoryMb -gt 0 -and $GpuMemoryMb -le 4608)
+    $GpuProfileName = if ($LegacyGtx970) { 'legacy_maxwell_4gb' } elseif ($LowVram) { 'low_vram' } else { 'modern' }
+
+    $GpuProfile = [ordered]@{
+        profile = $GpuProfileName
+        name = $GpuName
+        memory_mb = $GpuMemoryMb
+        legacy_torch = [bool]$LegacyGtx970
+        low_vram = [bool]$LowVram
+    }
+    $GpuProfile | ConvertTo-Json | Set-Content -Path (Join-Path $Runtime 'gpu_profile.json') -Encoding UTF8
+    Write-Host "[GPU] $GpuName / $GpuMemoryMb MB / profile=$GpuProfileName"
+
     if (-not (Test-Path (Join-Path $Ace '.git'))) {
         Write-Host '[ACE-Step] Cloning repository...'
         & git clone https://github.com/ACE-Step/ACE-Step-1.5.git $Ace
@@ -114,6 +146,25 @@ try {
         }
     } else {
         Write-Host '[ACE-Step] Environment OK. Skipping uv sync.'
+    }
+
+    if ($LegacyGtx970) {
+        $AceLegacyOk = Test-Python $AcePython "import torch; print('ACE capability:', torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None); print('ACE arches:', torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (5, 2); assert 'sm_52' in torch.cuda.get_arch_list()"
+        if ($ForceRepair -or -not $AceLegacyOk) {
+            Write-Host '[ACE-Step] GTX 970 detected: installing legacy CUDA 12.1 PyTorch with Maxwell support...'
+            Invoke-UvArgs @(
+                'pip', 'install', '--python', $AcePython, '--force-reinstall',
+                '--index-url', 'https://download.pytorch.org/whl/cu121',
+                'torch==2.5.1+cu121', 'torchvision==0.20.1+cu121', 'torchaudio==2.5.1+cu121'
+            ) 4
+            Write-Host '[ACE-Step] Installing legacy-compatible torchao for INT8 Tier-1 mode...'
+            Invoke-UvArgs @(
+                'pip', 'install', '--python', $AcePython, '--force-reinstall',
+                'torchao==0.11.0'
+            ) 4
+        } else {
+            Write-Host '[ACE-Step] GTX 970 legacy PyTorch is already compatible.'
+        }
     }
 
     if (-not (Test-Python $AcePython "import demucs; print('Demucs OK')")) {
@@ -146,20 +197,35 @@ try {
         }
     }
 
-    $SeedTorchOk = Test-Python $SeedPython "import torch, torchaudio; print('Seed torch:', torch.__version__); print('Seed CUDA build:', torch.version.cuda); assert torch.version.cuda is not None"
-    if ($ForceRepair -or -not $SeedTorchOk) {
-        Write-Host '[Seed-VC] Installing CUDA 12.8 PyTorch. Trying uv cache first...'
-        $torchArgs = @(
-            'pip', 'install', '--python', $SeedPython,
-            '--index-url', 'https://download.pytorch.org/whl/cu128',
-            'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128'
-        )
-        $offlineTorch = @('pip', 'install', '--offline', '--python', $SeedPython, '--index-url', 'https://download.pytorch.org/whl/cu128', 'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128')
-        if (-not (Try-UvArgs $offlineTorch)) {
-            Invoke-UvArgs $torchArgs 4
+    if ($LegacyGtx970) {
+        $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:', torch.__version__); print('Seed CUDA:', torch.version.cuda); print('Seed capability:', torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None); print('Seed arches:', torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (5, 2); assert 'sm_52' in torch.cuda.get_arch_list()"
+        if ($ForceRepair -or -not $SeedTorchOk) {
+            Write-Host '[Seed-VC] GTX 970 detected: installing CUDA 12.1 legacy PyTorch...'
+            $legacySeedArgs = @(
+                'pip', 'install', '--python', $SeedPython, '--force-reinstall',
+                '--index-url', 'https://download.pytorch.org/whl/cu121',
+                'torch==2.5.1+cu121', 'torchvision==0.20.1+cu121', 'torchaudio==2.5.1+cu121'
+            )
+            Invoke-UvArgs $legacySeedArgs 4
+        } else {
+            Write-Host '[Seed-VC] GTX 970 legacy PyTorch already installed.'
         }
     } else {
-        Write-Host '[Seed-VC] PyTorch already installed. No download.'
+        $SeedTorchOk = Test-Python $SeedPython "import torch, torchaudio; print('Seed torch:', torch.__version__); print('Seed CUDA build:', torch.version.cuda); assert torch.version.cuda is not None"
+        if ($ForceRepair -or -not $SeedTorchOk) {
+            Write-Host '[Seed-VC] Installing CUDA 12.8 PyTorch. Trying uv cache first...'
+            $torchArgs = @(
+                'pip', 'install', '--python', $SeedPython,
+                '--index-url', 'https://download.pytorch.org/whl/cu128',
+                'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128'
+            )
+            $offlineTorch = @('pip', 'install', '--offline', '--python', $SeedPython, '--index-url', 'https://download.pytorch.org/whl/cu128', 'torch==2.7.1+cu128', 'torchvision==0.22.1+cu128', 'torchaudio==2.7.1+cu128')
+            if (-not (Try-UvArgs $offlineTorch)) {
+                Invoke-UvArgs $torchArgs 4
+            }
+        } else {
+            Write-Host '[Seed-VC] PyTorch already installed. No download.'
+        }
     }
 
     $SeedImports = "import numpy, scipy, librosa, huggingface_hub, munch, einops, transformers, soundfile, yaml; print('Seed inference dependencies OK')"
