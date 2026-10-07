@@ -67,9 +67,15 @@ If anything fails, run `DIAGNOSE.bat` and attach `logs/diagnose.log` plus the st
 
 `FORCE_REPAIR.bat` intentionally re-runs environment installation checks. Use it only when an environment is actually corrupted.
 
-## RTX 50-series
+## GPU profiles
 
-The Seed-VC environment uses PyTorch 2.7.1 with CUDA 12.8, matching the CUDA generation used by the Windows ACE-Step environment and supporting RTX 50-series GPUs.
+The launcher detects the installed NVIDIA GPU and writes `runtime/gpu_profile.json`.
+
+- **Modern profile** — RTX 50-series and other modern NVIDIA GPUs: PyTorch 2.7.1 + CUDA 12.8.
+- **GTX 970 profile** — GeForce GTX 970 4 GB / Maxwell `sm_52`: PyTorch 2.5.1 + CUDA 12.1, ACE-Step Tier-1, INT8/CPU offload, batch size 1, reduced Seed-VC steps, and explicit ACE shutdown before Seed-VC to release VRAM.
+- Other <=4.5 GB GPUs are detected as low-VRAM and receive the memory-saving runtime profile, but the dedicated legacy PyTorch switch is currently specifically enabled for GTX 970.
+
+Run `DIAGNOSE.bat` to see the detected GPU, compute capability, CUDA architecture list, and active profile.
 
 ## Repository hygiene
 
