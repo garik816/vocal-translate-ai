@@ -256,7 +256,7 @@ try {
         }
     }
 
-    $SeedImports = "import numpy, scipy, librosa, huggingface_hub, munch, einops, transformers, soundfile, yaml; print('Seed inference dependencies OK')"
+    $SeedImports = "import numpy, scipy, librosa, huggingface_hub, munch, einops, transformers, soundfile, yaml, dac; from dac.nn.quantize import VectorQuantize; print('Seed inference dependencies OK')"
     $SeedDepsOk = Test-Python $SeedPython $SeedImports
     if ($ForceRepair -or -not $SeedDepsOk) {
         Write-Host '[Seed-VC] Installing minimal inference dependencies. Trying uv cache first...'
