@@ -23,5 +23,6 @@
   "api_port": 8001,
   "low_vram_reference_seconds": 12,
   "low_vram_seed_vc_diffusion_steps": 20,
-  "release_gpu_between_stages": false
+  "release_gpu_between_stages": false,
+  "reuse_ace_guides": true
 }
