@@ -5,8 +5,8 @@ chcp 65001 >nul
 if not exist "logs" mkdir "logs"
 
 echo ============================================================
-echo Vocal Translate AI v4
-echo input MP3 + translated lyrics -^> final MP3 in out
+echo Vocal Translate AI v7
+echo MP3 + Ukrainian lyrics -^> DiffSinger -^> Seed-VC -^> MP3
 echo ============================================================
 echo.
 echo [%date% %time%] RUN started>>"logs\launcher.log"
@@ -21,7 +21,7 @@ if %errorlevel%==0 (
 %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
 if errorlevel 1 goto :setup_fail
 
-set "PY=runtime\ACE-Step-1.5\.venv\Scripts\python.exe"
+set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :python_fail
 
 "%PY%" "%~dp0app.py"
@@ -29,7 +29,7 @@ if errorlevel 1 goto :pipeline_fail
 
 echo.
 echo ============================================================
-echo DONE. Final MP3 is in the out folder.
+echo DONE. Results are in the out folder.
 echo ============================================================
 echo [%date% %time%] RUN completed OK>>"logs\launcher.log"
 pause
@@ -48,11 +48,11 @@ exit /b 1
 :python_fail
 echo.
 echo ============================================================
-echo FAILED: ACE-Step Python environment was not created.
+echo FAILED: v7 Python environment was not created.
 echo Expected: %PY%
 echo Check logs\setup.log
 echo ============================================================
-echo [%date% %time%] RUN failed: ACE Python missing>>"logs\launcher.log"
+echo [%date% %time%] RUN failed: Seed Python missing>>"logs\launcher.log"
 pause
 exit /b 20
 
@@ -63,7 +63,9 @@ echo FAILED during PIPELINE.
 echo Check:
 echo   logs\run.log
 echo   logs\demucs.log
-echo   logs\ace_api.log
+echo   logs\asr.log
+echo   logs\melody.log
+echo   logs\diffsinger.log
 echo   logs\seed_vc.log
 echo   logs\ffmpeg.log
 echo ============================================================
