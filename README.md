@@ -1,109 +1,176 @@
-# Vocal Translate AI v6
+# Vocal Translate AI v7
 
-> Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md)
+Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
 
-Коротко: положи **один или несколько MP3** в `input/`, добавь соответствующие TXT с переводом, запусти `RUN.bat`, забери готовые MP3 из `out/`.
+> Quick start: see [QUICKSTART.md](QUICKSTART.md).
 
-Windows one-click local pipeline for translating a song vocal while preserving the original song structure.
+## v7 pipeline
 
-## Pipeline
+```text
+input/song.mp3
+input/lyrics.txt
+        |
+        v
+Demucs -> vocals + instrumental
+        |
+        +-> ID3/Whisper -> source lyrics + word/segment timings
+        |
+        +-> F0 extraction -> melody / note events
+        |
+        v
+OpenUtau-Lunai + Ukrainian DiffSinger phonemizer
+        |
+        v
+clean Ukrainian guide vocal
+        |
+        +-> out/song_uk_guide.mp3
+        |
+        v
+Seed-VC -> source-singer timbre transfer
+        |
+        v
+FFmpeg -> out/song_uk.mp3
+```
 
-`input/original.mp3` -> Demucs -> delexicalized melody source -> ACE-Step SFT faithful cover -> Demucs vocal cleanup -> Seed-VC -> remix -> `out/original_uk.mp3`
-
-The default flow:
-
-1. Demucs `htdemucs` separates `bass.wav`, `drums.wav`, `other.wav`, and `vocals.wav`.
-2. The three non-vocal stems are mixed into an instrumental.
-3. A short target-voice reference is automatically created from the original vocal stem after trimming the leading silence.
-4. ACE-Step 1.5 uses the **full original mix** as the Cover source, so melody, rhythm, chords, arrangement and section timing are better constrained.
-5. The ACE result is separated again with Demucs `--two-stems vocals`; only the isolated generated vocal is passed to Seed-VC.
-6. Seed-VC converts that clean guide vocal toward the reference timbre while preserving F0.
-7. FFmpeg mixes the converted vocal with the original Demucs instrumental and writes a 320 kbps MP3 to `out/`.
+ACE-Step is no longer used in the v7 Ukrainian synthesis path.
 
 ## Input
 
-Put one or more MP3 files into `input/`.
+Single track:
 
-For a single track, `input/lyrics.txt` is supported. For batch mode, use matching files such as `input/lyrics/song1.txt` for `input/song1.mp3`, or place `song1.txt` beside `song1.mp3`. Section labels such as `[Verse 1]` and `[Chorus]` are supported. The pipeline adds ACE language metadata automatically; it does not rewrite the lyric text.
+```text
+input/
+  song.mp3
+  lyrics.txt
+```
 
-Optional: use `input/reference/<track name>.wav` for per-track voice references, or `input/reference.wav` as a shared fallback. Otherwise a reference is extracted automatically from each Demucs vocal stem.
+Batch mode:
 
-Batch jobs are processed sequentially to limit VRAM usage. By default, one failed track does not stop the remaining tracks.
+```text
+input/
+  song1.mp3
+  song2.mp3
+  lyrics/
+    song1.txt
+    song2.txt
+```
 
-## Run
+The target TXT is treated as authoritative. The program does not rewrite it. Invisible Unicode characters are only normalized internally when needed by synthesis.
 
-Double-click `RUN.bat`.
+Optional voice reference:
 
-The setup check runs every time but does not reinstall healthy environments. On an already configured machine this is only a fast import/version check.
+```text
+input/reference.wav
+input/reference/song1.wav
+```
 
-First-time setup needs Internet access for repositories, Python packages, and model weights. Later runs reuse local environments, package caches, and downloaded model weights.
+If no reference is supplied, one is extracted automatically from the original vocal stem.
 
-## Quality changes in v6
+## Source-text extraction
 
-- Strict Ukrainian mode no longer feeds the Russian singer reference into ACE-Step. Timbre transfer happens later in Seed-VC.
-- The ACE cover source is now a delexicalized mix: instrumental + a heavily low-passed version of the original vocal. This keeps pitch/rhythm cues while suppressing most source-language consonant/formant information.
-- On capable GPUs (including the RTX 5080 16 GB class) strict mode switches to `acestep-v15-sft` at 50 steps with CFG for better semantic/lyric parsing. Low-VRAM GPUs remain on Turbo.
-- Ukrainian synthesis input gets Unicode-only cleanup (zero-width characters removed; standalone Latin `I` normalized to Cyrillic `І`). The user's TXT file itself is never rewritten.
-- Seed-VC reference length is reduced to 8 seconds. Seed-VC has a 30-second context window; shorter reference leaves much more room for each source chunk and reduces crossfade/boundary artifacts.
-- A diagnostic mix is written before Seed-VC as `*_uk_guide.mp3`. Compare it with the final `*_uk.mp3` to distinguish ACE pronunciation errors from voice-conversion artifacts.
+v7 can extract the original-language lyrics from the MP3.
 
-- `audio_cover_strength=1.0` by default for a faithful cover.
-- `cover_noise_strength=0.25` is now explicitly set. ACE-Step documents 0 as no melody retention; leaving it at the old default allowed excessive reinterpretation.
-- ACE source defaults to the full original mix instead of the isolated vocal stem.
-- ACE output is vocal-separated before Seed-VC to prevent instruments/noise from being converted into ghost vocals.
-- Seed-VC uses 50 diffusion steps on normal GPUs for higher SVC quality; low-VRAM GPU profiles still reduce this automatically.
-- FFmpeg limiters use `level=false`, so peak protection no longer auto-raises the backing track.
-- ACE guide caching now includes a generation fingerprint. Old/bad guides are automatically invalidated when quality parameters change.
+Run:
 
-### Reliability retained from v4
+```text
+EXTRACT_LYRICS.bat
+```
 
-- ACE-Step is started directly from its existing `.venv`; the pipeline does not use `uv run`, so normal runs cannot trigger an implicit environment sync.
-- Existing ACE-Step and Seed-VC repositories are not automatically updated.
-- Existing working environments are not rebuilt.
-- ACE-Step first-time sync explicitly skips `flash-attn`; ACE-Step can use SDPA instead.
-- Seed-VC installs only a minimal inference dependency set instead of its full GUI/training requirements.
-- Seed-VC first tries the local uv cache before downloading the CUDA 12.8 PyTorch wheels.
-- Demucs is installed into the ACE-Step Python environment, so it reuses the already installed CUDA PyTorch instead of creating another large PyTorch environment.
-- Every stage has a persistent log, and `RUN.bat` always pauses after success or failure.
+The extractor checks embedded MP3 lyrics first and also runs Whisper on the Demucs vocal stem to obtain timing information.
 
-## Logs
+Outputs:
 
-- `logs/setup.log` - dependency/environment setup
-- `logs/run.log` - end-to-end pipeline and traceback
-- `logs/demucs.log` - stem separation
-- `logs/ace_api.log` - ACE-Step API/model generation
-- `logs/seed_vc.log` - Seed-VC inference/model downloads
-- `logs/ffmpeg.log` - audio mixing/encoding
-- `logs/launcher.log` - launcher exit status
-- `logs/diagnose.log` - generated by `DIAGNOSE.bat`
+```text
+out/song_source_lyrics.txt
+out/song_source_lyrics.srt
+out/song_source_lyrics.json
+```
 
-If anything fails, run `DIAGNOSE.bat` and attach `logs/diagnose.log` plus the stage log named by the error.
+The extracted source text is used for alignment/timing support. It never silently replaces the target Ukrainian lyrics.
 
-## Repair
+## Ukrainian synthesis
 
-`SETUP_ONLY.bat` performs the normal non-destructive verification.
+v7 uses OpenUtau-Lunai because it contains a native `DiffSingerUkrainianPhonemizer`.
 
-`FORCE_REPAIR.bat` intentionally re-runs environment installation checks. Use it only when an environment is actually corrupted.
+The default guide voice is **Nero v170**. Its timbre is only an intermediate guide; Seed-VC then transfers the source singer's timbre.
+
+Generated diagnostics:
+
+```text
+work/<song>/source_lyrics/
+work/<song>/melody/melody.json
+work/<song>/diffsinger/guide.ustx
+work/<song>/diffsinger/alignment.json
+work/<song>/diffsinger/guide_uk.wav
+```
+
+The most important output for quality checking is:
+
+```text
+out/song_uk_guide.mp3
+```
+
+If this file already has bad Ukrainian pronunciation, the issue is in alignment/DiffSinger and Seed-VC should not be blamed. If the guide is clean but `song_uk.mp3` is damaged, the problem is in Seed-VC.
+
+## Final repeated chorus
+
+When the target lyrics contain an extra final chorus that is not present in the source structure, v7 can duplicate the previous chorus melody and instrumental section automatically:
+
+```json
+"append_final_repeated_section": true
+```
+
+The user's lyric text is still preserved.
 
 ## GPU profiles
 
-The launcher detects the installed NVIDIA GPU and writes `runtime/gpu_profile.json`.
+Supported profiles:
 
-- **Modern profile** — RTX 50-series and other modern NVIDIA GPUs: PyTorch 2.7.1 + CUDA 12.8.
-- **RTX 3080 profile** — GeForce RTX 3080 10/12 GB / Ampere `sm_86`: PyTorch 2.7.1 + CUDA 12.8, batch size 1, ACE VRAM released before Seed-VC, and ACE-Step VRAM tier forced from the card's actual 10/12 GB capacity.
-- **GTX 970 profile** — GeForce GTX 970 4 GB / Maxwell `sm_52`: PyTorch 2.5.1 + CUDA 12.1, ACE-Step Tier-1, INT8/CPU offload, batch size 1, reduced Seed-VC steps, and explicit ACE shutdown before Seed-VC to release VRAM.
-- Other <=4.5 GB GPUs are detected as low-VRAM and receive the memory-saving runtime profile, but the dedicated legacy PyTorch switch is currently specifically enabled for GTX 970.
+- **RTX 5080 / modern NVIDIA** — CUDA 12.8 PyTorch, Whisper on CUDA, DiffSinger via DirectML, full Seed-VC quality.
+- **RTX 3080 10/12 GB** — CUDA 12.8 PyTorch, CUDA Whisper, DirectML DiffSinger, slightly reduced Seed-VC load.
+- **GTX 970 4 GB** — legacy PyTorch CUDA 12.1 / `sm_52`; Whisper forced to CPU; lighter DiffSinger and Seed-VC settings.
 
-Run `DIAGNOSE.bat` to see the detected GPU, compute capability, CUDA architecture list, and active profile.
+Demucs automatically falls back to CPU if its CUDA pass fails.
+
+## First run / downloads
+
+The first run needs Internet for:
+
+- Seed-VC repository and model weights;
+- Demucs model;
+- Whisper model;
+- OpenUtau-Lunai source/build dependencies;
+- Nero DiffSinger voicebank;
+- Python/.NET dependencies.
+
+After these assets are cached locally, normal synthesis is local.
+
+## Logs
+
+```text
+logs/setup.log
+logs/run.log
+logs/demucs.log
+logs/asr.log
+logs/melody.log
+logs/diffsinger.log
+logs/seed_vc.log
+logs/ffmpeg.log
+logs/diagnose.log
+```
+
+Run `DIAGNOSE.bat` if something fails.
+
+## Repair
+
+- `SETUP_ONLY.bat` — verify/install missing dependencies.
+- `FORCE_REPAIR.bat` — force environment repair.
+- `EXTRACT_LYRICS.bat` — only source-text extraction.
 
 ## Repository hygiene
 
-Audio, local lyrics, AI runtimes, downloaded models, generated work files, and logs are ignored by Git.
+Audio, lyrics, generated output, downloaded models, runtime environments and logs are ignored by Git.
 
-## Voice rights
+## Rights
 
-For publishing or commercial use, make sure you have the required rights and permission for the song and any real person's voice likeness.
-
-## Strict Ukrainian mode download note
-
-On the first strict-quality run on a capable GPU, ACE-Step may download the SFT checkpoint if it is not already present. The SFT weight file is about 4.79 GB. This is a one-time model download; subsequent runs reuse it locally.
+For publication or commercial use, make sure you have the necessary rights for the song and any real person's voice likeness.
