@@ -135,7 +135,11 @@ try {
     }
 
     $AcePython = Join-Path $Ace '.venv\Scripts\python.exe'
-    $AceOk = Test-Python $AcePython "import torch, acestep; print('ACE torch:', torch.__version__); print('ACE CUDA:', torch.cuda.is_available())"
+    if ($LegacyGtx970) {
+        $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA:',torch.cuda.is_available())"
+    } else {
+        $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA:',torch.cuda.is_available()); cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('ACE device arch:',arch); print('ACE wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert (not torch.cuda.is_available()) or arch in torch.cuda.get_arch_list()"
+    }
     if ($ForceRepair -or -not $AceOk) {
         Write-Host '[ACE-Step] Creating/repairing environment WITHOUT flash-attn...'
         Push-Location $Ace
@@ -211,7 +215,7 @@ try {
             Write-Host '[Seed-VC] GTX 970 legacy PyTorch already installed.'
         }
     } else {
-        $SeedTorchOk = Test-Python $SeedPython "import torch, torchaudio; print('Seed torch:', torch.__version__); print('Seed CUDA build:', torch.version.cuda); assert torch.version.cuda is not None"
+        $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:',torch.__version__); print('Seed CUDA build:',torch.version.cuda); assert torch.version.cuda is not None; cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('Seed device arch:',arch); print('Seed wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert arch in torch.cuda.get_arch_list()"
         if ($ForceRepair -or -not $SeedTorchOk) {
             Write-Host '[Seed-VC] Installing CUDA 12.8 PyTorch. Trying uv cache first...'
             $torchArgs = @(
