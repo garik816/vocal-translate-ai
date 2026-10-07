@@ -56,18 +56,63 @@ static class Program {
         }
 
         ToolsManager.Inst.Initialize();
+        Console.WriteLine("[OpenUtau] Singer search paths:");
+        foreach (var path in PathManager.Inst.SingersPaths) {
+            Console.WriteLine($"[OpenUtau]   {path}");
+        }
+
         SingerManager.Inst.Initialize();
     }
 
-    static USinger? FindSinger(string singerHint) {
-        return SingerManager.Inst.Singers.Values
+    static USinger? FindSinger(string singerHint, string singersRoot) {
+        string root = Path.GetFullPath(singersRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        var all = SingerManager.Inst.Singers.Values
             .Where(s => s.SingerType == USingerType.DiffSinger)
-            .OrderByDescending(s =>
-                s.Name.Contains(
-                    singerHint, StringComparison.OrdinalIgnoreCase)
-                || s.Id.Contains(
-                    singerHint, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(s => s.Name)
+            .ToList();
+
+        Console.WriteLine($"[OpenUtau] DiffSinger candidates: {all.Count}");
+        foreach (var s in all.OrderBy(s => s.Name)) {
+            Console.WriteLine(
+                $"[OpenUtau] Singer candidate: name='{s.Name}' "
+                + $"id='{s.Id}' location='{s.Location}'");
+        }
+
+        var local = all.Where(s => {
+            try {
+                string location = Path.GetFullPath(s.Location ?? string.Empty)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return location.StartsWith(
+                    root + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(location, root, StringComparison.OrdinalIgnoreCase);
+            } catch {
+                return false;
+            }
+        }).ToList();
+
+        var pool = local.Count > 0 ? local : all;
+
+        var hinted = pool.FirstOrDefault(s =>
+            (s.Name ?? string.Empty).Contains(
+                singerHint, StringComparison.OrdinalIgnoreCase)
+            || (s.Id ?? string.Empty).Contains(
+                singerHint, StringComparison.OrdinalIgnoreCase));
+
+        if (hinted != null) {
+            return hinted;
+        }
+
+        if (pool.Count == 1) {
+            Console.WriteLine(
+                $"[OpenUtau] Singer name does not contain '{singerHint}', "
+                + $"using the only DiffSinger candidate: {pool[0].Name}");
+            return pool[0];
+        }
+
+        return pool
+            .OrderBy(s => s.Name)
             .FirstOrDefault();
     }
 
@@ -83,7 +128,7 @@ static class Program {
 
         ConfigureOpenUtau(singersRoot, 20);
 
-        var singer = FindSinger(singerHint);
+        var singer = FindSinger(singerHint, singersRoot);
         if (singer == null) {
             Console.Error.WriteLine(
                 $"No DiffSinger voicebank matching '{singerHint}' "
@@ -133,7 +178,7 @@ static class Program {
 
         ConfigureOpenUtau(singersRoot, steps);
 
-        var singer = FindSinger(singerHint);
+        var singer = FindSinger(singerHint, singersRoot);
         if (singer == null) {
             Console.Error.WriteLine(
                 $"No DiffSinger voicebank matching '{singerHint}' "
