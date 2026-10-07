@@ -21,10 +21,11 @@ def locate_stems(root: Path) -> dict[str, Path]:
     raise RuntimeError(f"Demucs stems not found under {root}")
 
 
-def _run_demucs_command(cmd: list[str], cfg: dict[str, Any]) -> None:
+def _run_demucs_command(cmd: list[str], input_audio: Path,
+                        cfg: dict[str, Any]) -> None:
     device = str(cfg.get("demucs_device", "cuda"))
     rc = run_logged(
-        cmd + ["--device", device],
+        cmd + ["--device", device, str(input_audio)],
         LOG_DIR / "demucs.log",
         cwd=ROOT,
         check=False,
@@ -32,7 +33,7 @@ def _run_demucs_command(cmd: list[str], cfg: dict[str, Any]) -> None:
     if rc != 0 and device.lower() != "cpu" and cfg.get("demucs_cpu_fallback", True):
         log("[Demucs] CUDA failed; retrying on CPU.")
         run_logged(
-            cmd + ["--device", "cpu"],
+            cmd + ["--device", "cpu", str(input_audio)],
             LOG_DIR / "demucs.log",
             cwd=ROOT,
             check=True,
@@ -60,9 +61,8 @@ def run_demucs(original: Path, track_work: Path, cfg: dict[str, Any]) -> dict[st
         str(ace_python()), "-m", "demucs",
         "-n", model,
         "-o", str(separated),
-        str(original),
     ]
-    _run_demucs_command(cmd, cfg)
+    _run_demucs_command(cmd, original, cfg)
 
     stems = locate_stems(separated)
     log(f"[Demucs] Stems ready: {stems['vocals'].parent}")
@@ -102,9 +102,8 @@ def isolate_guide_vocals(guides: list[Path], track_work: Path,
             "-n", model,
             "--two-stems", "vocals",
             "-o", str(work),
-            str(guide),
         ]
-        _run_demucs_command(cmd, cfg)
+        _run_demucs_command(cmd, guide, cfg)
 
         candidates = sorted(work.rglob("vocals.wav"))
         if not candidates:
