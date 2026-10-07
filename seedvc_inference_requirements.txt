@@ -9,3 +9,4 @@ soundfile==0.12.1
 pyyaml
 descript-audio-codec==1.0.0
 hf_xet
+demucs==4.0.1\nopenai-whisper\nmutagen>=1.47.0\n
