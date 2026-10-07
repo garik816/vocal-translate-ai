@@ -111,8 +111,17 @@ try {
     }
 
     $LegacyGtx970 = $GpuName -match 'GTX\s*970'
+    $Rtx3080 = $GpuName -match 'RTX\s*3080'
     $LowVram = ($GpuMemoryMb -gt 0 -and $GpuMemoryMb -le 4608)
-    $GpuProfileName = if ($LegacyGtx970) { 'legacy_maxwell_4gb' } elseif ($LowVram) { 'low_vram' } else { 'modern' }
+    $GpuProfileName = if ($LegacyGtx970) {
+        'legacy_maxwell_4gb'
+    } elseif ($Rtx3080) {
+        'ampere_rtx3080'
+    } elseif ($LowVram) {
+        'low_vram'
+    } else {
+        'modern'
+    }
 
     $GpuProfile = [ordered]@{
         profile = $GpuProfileName
@@ -120,6 +129,8 @@ try {
         memory_mb = $GpuMemoryMb
         legacy_torch = [bool]$LegacyGtx970
         low_vram = [bool]$LowVram
+        rtx3080 = [bool]$Rtx3080
+        release_between_stages = [bool]($Rtx3080 -or $LowVram)
     }
     $GpuProfile | ConvertTo-Json | Set-Content -Path (Join-Path $Runtime 'gpu_profile.json') -Encoding UTF8
     Write-Host "[GPU] $GpuName / $GpuMemoryMb MB / profile=$GpuProfileName"
@@ -137,6 +148,8 @@ try {
     $AcePython = Join-Path $Ace '.venv\Scripts\python.exe'
     if ($LegacyGtx970) {
         $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA:',torch.cuda.is_available())"
+    } elseif ($Rtx3080) {
+        $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA build:',torch.version.cuda); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (8, 6); assert 'sm_86' in torch.cuda.get_arch_list(); assert torch.__version__.startswith('2.7.1'); assert torch.version.cuda == '12.8'"
     } else {
         $AceOk = Test-Python $AcePython "import torch,acestep; print('ACE torch:',torch.__version__); print('ACE CUDA:',torch.cuda.is_available()); cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('ACE device arch:',arch); print('ACE wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert (not torch.cuda.is_available()) or arch in torch.cuda.get_arch_list()"
     }
@@ -215,7 +228,11 @@ try {
             Write-Host '[Seed-VC] GTX 970 legacy PyTorch already installed.'
         }
     } else {
-        $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:',torch.__version__); print('Seed CUDA build:',torch.version.cuda); assert torch.version.cuda is not None; cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('Seed device arch:',arch); print('Seed wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert arch in torch.cuda.get_arch_list()"
+        if ($Rtx3080) {
+            $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:',torch.__version__); print('Seed CUDA build:',torch.version.cuda); assert torch.cuda.is_available(); assert torch.cuda.get_device_capability(0) == (8, 6); assert 'sm_86' in torch.cuda.get_arch_list(); assert torch.__version__.startswith('2.7.1'); assert torch.version.cuda == '12.8'"
+        } else {
+            $SeedTorchOk = Test-Python $SeedPython "import torch,torchaudio; print('Seed torch:',torch.__version__); print('Seed CUDA build:',torch.version.cuda); assert torch.version.cuda is not None; cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None; arch=(f'sm_{cap[0]}{cap[1]}' if cap else None); print('Seed device arch:',arch); print('Seed wheel arches:',torch.cuda.get_arch_list() if torch.cuda.is_available() else []); assert torch.cuda.is_available(); assert arch in torch.cuda.get_arch_list()"
+        }
         if ($ForceRepair -or -not $SeedTorchOk) {
             Write-Host '[Seed-VC] Installing CUDA 12.8 PyTorch. Trying uv cache first...'
             $torchArgs = @(
