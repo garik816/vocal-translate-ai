@@ -118,6 +118,7 @@ FFmpeg
 - Windows
 - NVIDIA CUDA
 - RTX 50-series / CUDA 12.8
+- **GeForce GTX 970 4 GB (Maxwell)** — отдельный legacy/low-VRAM профиль
 - один или несколько MP3
 - вход: MP3
 - текст: UTF-8 TXT
@@ -164,3 +165,30 @@ logs/ffmpeg.log
 ## Первый запуск
 
 Первый запуск требует Интернет для скачивания репозиториев, Python-пакетов и моделей. После установки основная работа выполняется локально.
+
+
+## GTX 970 / 4 GB VRAM
+
+GTX 970 определяется автоматически.
+
+Для неё программа включает отдельный профиль:
+
+- Maxwell `sm_52`
+- legacy PyTorch + CUDA 12.1 вместо CUDA 12.8
+- ACE-Step Tier-1 / DiT-only
+- INT8 + CPU offload в ACE-Step
+- batch size = 1
+- сокращённый voice reference (по умолчанию до 12 с)
+- Seed-VC: меньше diffusion steps (по умолчанию максимум 20)
+- ACE-Step полностью выгружается перед Seed-VC, чтобы модели не занимали VRAM одновременно
+- Demucs при ошибке CUDA автоматически повторяется на CPU
+
+На GTX 970 обработка будет существенно медленнее, чем на современной RTX, но режим рассчитан именно на 4 ГБ VRAM.
+
+Проверить, какой профиль выбран:
+
+```text
+DIAGNOSE.bat
+```
+
+В `logs/diagnose.log` будут GPU, compute capability, список CUDA-архитектур PyTorch и активный `gpu_profile.json`.
