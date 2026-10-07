@@ -1,4 +1,4 @@
-# Vocal Translate AI v5
+# Vocal Translate AI v6
 
 > Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md)
 
@@ -8,7 +8,7 @@ Windows one-click local pipeline for translating a song vocal while preserving t
 
 ## Pipeline
 
-`input/original.mp3` -> Demucs -> ACE-Step 1.5 faithful cover -> Demucs vocal cleanup -> Seed-VC -> remix -> `out/original_uk.mp3`
+`input/original.mp3` -> Demucs -> delexicalized melody source -> ACE-Step SFT faithful cover -> Demucs vocal cleanup -> Seed-VC -> remix -> `out/original_uk.mp3`
 
 The default flow:
 
@@ -38,7 +38,14 @@ The setup check runs every time but does not reinstall healthy environments. On 
 
 First-time setup needs Internet access for repositories, Python packages, and model weights. Later runs reuse local environments, package caches, and downloaded model weights.
 
-## Quality changes in v5
+## Quality changes in v6
+
+- Strict Ukrainian mode no longer feeds the Russian singer reference into ACE-Step. Timbre transfer happens later in Seed-VC.
+- The ACE cover source is now a delexicalized mix: instrumental + a heavily low-passed version of the original vocal. This keeps pitch/rhythm cues while suppressing most source-language consonant/formant information.
+- On capable GPUs (including the RTX 5080 16 GB class) strict mode switches to `acestep-v15-sft` at 50 steps with CFG for better semantic/lyric parsing. Low-VRAM GPUs remain on Turbo.
+- Ukrainian synthesis input gets Unicode-only cleanup (zero-width characters removed; standalone Latin `I` normalized to Cyrillic `І`). The user's TXT file itself is never rewritten.
+- Seed-VC reference length is reduced to 8 seconds. Seed-VC has a 30-second context window; shorter reference leaves much more room for each source chunk and reduces crossfade/boundary artifacts.
+- A diagnostic mix is written before Seed-VC as `*_uk_guide.mp3`. Compare it with the final `*_uk.mp3` to distinguish ACE pronunciation errors from voice-conversion artifacts.
 
 - `audio_cover_strength=1.0` by default for a faithful cover.
 - `cover_noise_strength=0.25` is now explicitly set. ACE-Step documents 0 as no melody retention; leaving it at the old default allowed excessive reinterpretation.
@@ -96,3 +103,7 @@ Audio, local lyrics, AI runtimes, downloaded models, generated work files, and l
 ## Voice rights
 
 For publishing or commercial use, make sure you have the required rights and permission for the song and any real person's voice likeness.
+
+## Strict Ukrainian mode download note
+
+On the first strict-quality run on a capable GPU, ACE-Step may download the SFT checkpoint if it is not already present. The SFT weight file is about 4.79 GB. This is a one-time model download; subsequent runs reuse it locally.
