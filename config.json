@@ -15,10 +15,13 @@
   "ace_inference_steps": 8,
   "ace_batch_size": 1,
   "seed_vc_diffusion_steps": 30,
-  "seed_vc_cfg_rate": 0.70,
+  "seed_vc_cfg_rate": 0.7,
   "seed_vc_pitch_shift": 0,
-  "mix_vocal_gain_db": 0.0,
-  "mix_instrumental_gain_db": 0.0,
+  "mix_vocal_gain_db": 0,
+  "mix_instrumental_gain_db": 0,
   "output_bitrate": "320k",
-  "api_port": 8001
+  "api_port": 8001,
+  "low_vram_reference_seconds": 12,
+  "low_vram_seed_vc_diffusion_steps": 20,
+  "release_gpu_between_stages": false
 }
