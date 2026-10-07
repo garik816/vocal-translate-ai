@@ -185,14 +185,29 @@ def build_reference(vocals: Path, track_work: Path, ffmpeg: str,
     sibling = INPUT_DIR / f"{original.stem}.wav"
     shared = INPUT_DIR / "reference.wav"
 
+    output = track_work / "reference.wav"
+    seconds = int(cfg.get("reference_seconds", 8))
+    threshold = str(cfg.get("reference_silence_threshold", "-45dB"))
+
     for manual in (per_track, sibling, shared):
         if manual.exists():
-            log(f"[Reference] Using {manual.relative_to(ROOT)}")
-            return manual
-
-    output = track_work / "reference.wav"
-    seconds = int(cfg.get("reference_seconds", 22))
-    threshold = str(cfg.get("reference_silence_threshold", "-45dB"))
+            log(
+                f"[Reference] Using {manual.relative_to(ROOT)} "
+                f"(normalized/cropped to {seconds}s for Seed-VC)."
+            )
+            run_logged(
+                [
+                    ffmpeg, "-y",
+                    "-i", str(manual),
+                    "-t", str(seconds),
+                    "-ac", "1",
+                    "-ar", "44100",
+                    "-c:a", "pcm_s16le",
+                    str(output),
+                ],
+                LOG_DIR / "ffmpeg.log",
+            )
+            return output
     af = (
         f"silenceremove=start_periods=1:"
         f"start_silence=0.20:start_threshold={threshold}"
