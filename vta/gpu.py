@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from .common import ROOT, log
@@ -10,24 +9,21 @@ PROFILE_PATH = ROOT / "runtime" / "gpu_profile.json"
 
 
 def load_gpu_profile() -> dict[str, Any]:
+    default = {
+        "profile": "unknown",
+        "name": "unknown",
+        "memory_mb": 0,
+        "legacy_torch": False,
+        "low_vram": False,
+        "rtx3080": False,
+    }
     if not PROFILE_PATH.exists():
-        return {
-            "profile": "unknown",
-            "name": "unknown",
-            "memory_mb": 0,
-            "legacy_torch": False,
-            "low_vram": False,
-        }
+        return default
     try:
-        return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        data = json.loads(PROFILE_PATH.read_text(encoding="utf-8-sig"))
+        return {**default, **data}
     except Exception:
-        return {
-            "profile": "unknown",
-            "name": "unknown",
-            "memory_mb": 0,
-            "legacy_torch": False,
-            "low_vram": False,
-        }
+        return default
 
 
 def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -40,89 +36,57 @@ def apply_gpu_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     memory_mb = int(profile.get("memory_mb") or 0)
     low_vram = bool(profile.get("low_vram", False))
     is_rtx3080 = bool(profile.get("rtx3080", False))
-    release_between = bool(profile.get("release_between_stages", False))
 
-    log(
-        f"[GPU] {name} | profile={profile_name} | "
-        f"VRAM={memory_mb} MB"
-    )
-
-    quality = str(cfg.get("quality_profile", "high")).lower()
+    log(f"[GPU] {name} | profile={profile_name} | VRAM={memory_mb} MB")
 
     if low_vram:
-        cfg["ace_model"] = "acestep-v15-turbo"
-        cfg["ace_inference_steps"] = min(int(cfg.get("ace_inference_steps", 8)), 8)
-        cfg["ace_batch_size"] = 1
-        cfg["reference_seconds"] = min(
-            int(cfg.get("reference_seconds", 22)),
-            int(cfg.get("low_vram_reference_seconds", 12)),
+        cfg["asr_device"] = "cpu"
+        cfg["asr_model"] = str(cfg.get("low_vram_asr_model", "small"))
+        cfg["diffsinger_steps"] = min(
+            int(cfg.get("diffsinger_steps", 30)),
+            int(cfg.get("low_vram_diffsinger_steps", 20)),
         )
         cfg["seed_vc_diffusion_steps"] = min(
-            int(cfg.get("seed_vc_diffusion_steps", 30)),
+            int(cfg.get("seed_vc_diffusion_steps", 50)),
             int(cfg.get("low_vram_seed_vc_diffusion_steps", 20)),
         )
-        cfg["_release_gpu_between_stages"] = True
+        cfg["reference_seconds"] = min(int(cfg.get("reference_seconds", 8)), 8)
         log(
-            "[GPU] Low-VRAM mode: ACE DiT-only/Tier-1, batch=1, "
-            "short reference, reduced Seed-VC steps, release VRAM between stages."
+            "[GPU] Low-VRAM v7 mode: Whisper on CPU, lighter DiffSinger, "
+            "reduced Seed-VC steps."
         )
     elif is_rtx3080:
-        if quality in {"high", "strict"} and memory_mb >= 11264:
-            cfg["ace_model"] = "acestep-v15-sft"
-            cfg["ace_inference_steps"] = 50
-        else:
-            cfg["ace_model"] = "acestep-v15-turbo"
-            cfg["ace_inference_steps"] = min(int(cfg.get("ace_inference_steps", 8)), 12)
-        cfg["ace_batch_size"] = min(int(cfg.get("ace_batch_size", 1)), 1)
-        cfg["_release_gpu_between_stages"] = True
-        log(
-            "[GPU] RTX 3080 mode: modern CUDA profile, batch=1, "
-            "release ACE VRAM before Seed-VC."
+        cfg["asr_device"] = "cuda"
+        cfg["asr_model"] = str(cfg.get("asr_model", "turbo"))
+        cfg["diffsinger_steps"] = min(int(cfg.get("diffsinger_steps", 30)), 30)
+        cfg["seed_vc_diffusion_steps"] = min(
+            int(cfg.get("seed_vc_diffusion_steps", 50)), 45
         )
-    elif release_between:
-        if quality in {"high", "strict"} and memory_mb >= 14336:
-            cfg["ace_model"] = "acestep-v15-sft"
-            cfg["ace_inference_steps"] = 50
-            log("[GPU] Quality mode: using ACE-Step SFT, 50 steps + CFG.")
-        cfg["_release_gpu_between_stages"] = True
-        log(
-            "[GPU] Shared-VRAM safety: release ACE-Step before Seed-VC "
-            "on this <=18GB GPU."
-        )
+        log("[GPU] RTX 3080 v7 mode: CUDA ASR + DirectML DiffSinger + Seed-VC.")
     else:
-        cfg["_release_gpu_between_stages"] = bool(
-            cfg.get("release_gpu_between_stages", False)
-        )
+        if memory_mb >= 6144:
+            cfg["asr_device"] = "cuda"
+        else:
+            cfg["asr_device"] = str(cfg.get("asr_device", "auto"))
+        cfg["asr_model"] = str(cfg.get("asr_model", "turbo"))
+        cfg["diffsinger_steps"] = int(cfg.get("diffsinger_steps", 30))
+        log("[GPU] Modern v7 mode: CUDA ASR + DirectML DiffSinger + Seed-VC.")
 
     return cfg
 
 
-def ace_environment_overrides() -> dict[str, str]:
-    profile = load_gpu_profile()
-    env: dict[str, str] = {}
-    if bool(profile.get("low_vram", False)):
-        # ACE-Step officially supports MAX_CUDA_VRAM for its tier system.
-        memory_mb = int(profile.get("memory_mb") or 4096)
-        memory_gb = max(1, min(4, memory_mb // 1024))
-        env["MAX_CUDA_VRAM"] = str(memory_gb)
-        env["CUDA_MODULE_LOADING"] = "LAZY"
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
-    elif bool(profile.get("rtx3080", False)):
-        memory_mb = int(profile.get("memory_mb") or 10240)
-        memory_gb = max(8, min(12, round(memory_mb / 1024)))
-        env["MAX_CUDA_VRAM"] = str(memory_gb)
-        env["CUDA_MODULE_LOADING"] = "LAZY"
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-    return env
-
-
 def seed_environment_overrides() -> dict[str, str]:
     profile = load_gpu_profile()
-    env: dict[str, str] = {}
+    env: dict[str, str] = {"CUDA_MODULE_LOADING": "LAZY"}
     if bool(profile.get("low_vram", False)):
-        env["CUDA_MODULE_LOADING"] = "LAZY"
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
     elif bool(profile.get("rtx3080", False)):
-        env["CUDA_MODULE_LOADING"] = "LAZY"
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+    else:
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
     return env
+
+
+# Legacy compatibility for the unused v6 ACE helpers.
+def ace_environment_overrides() -> dict[str, str]:
+    return {}
