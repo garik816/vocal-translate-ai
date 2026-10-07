@@ -13,8 +13,11 @@ LOG_DIR = ROOT / "logs"
 OUT_DIR = ROOT / "out"
 WORK_DIR = ROOT / "work"
 INPUT_DIR = ROOT / "input"
-ACE_DIR = ROOT / "runtime" / "ACE-Step-1.5"
 SEED_DIR = ROOT / "runtime" / "seed-vc"
+OPENUTAU_DIR = ROOT / "runtime" / "OpenUtau-lunai"
+DIFFSINGER_DIR = ROOT / "runtime" / "diffsinger"
+# Kept only so old v6 helper modules do not break when imported manually.
+ACE_DIR = ROOT / "runtime" / "ACE-Step-1.5"
 RUN_LOG = LOG_DIR / "run.log"
 
 
@@ -70,15 +73,15 @@ def require(path: Path, label: str) -> None:
         raise FileNotFoundError(f"{label} not found: {path}")
 
 
-def ace_python() -> Path:
-    path = ACE_DIR / ".venv" / "Scripts" / "python.exe"
-    require(path, "ACE-Step Python")
-    return path
-
-
 def seed_python() -> Path:
     path = SEED_DIR / ".venv" / "Scripts" / "python.exe"
     require(path, "Seed-VC Python")
+    return path
+
+
+def ace_python() -> Path:
+    path = ACE_DIR / ".venv" / "Scripts" / "python.exe"
+    require(path, "Legacy ACE-Step Python")
     return path
 
 
@@ -103,17 +106,15 @@ def find_lyrics_for(original: Path, cfg: dict[str, Any], total_tracks: int) -> P
         INPUT_DIR / f"{stem}.txt",
     ]
 
-    # Backward-compatible single-track mode.
     if total_tracks == 1:
         if cfg.get("lyrics_file"):
             candidates.append(ROOT / str(cfg["lyrics_file"]))
-        candidates += [INPUT_DIR / "lyrics_acestep.txt", INPUT_DIR / "lyrics.txt"]
+        candidates += [INPUT_DIR / "lyrics.txt"]
 
-    # Optional: deliberately use one lyric file for every track.
     if total_tracks > 1 and cfg.get("batch_shared_lyrics", False):
         if cfg.get("lyrics_file"):
             candidates.append(ROOT / str(cfg["lyrics_file"]))
-        candidates += [INPUT_DIR / "lyrics_acestep.txt", INPUT_DIR / "lyrics.txt"]
+        candidates += [INPUT_DIR / "lyrics.txt"]
 
     for path in candidates:
         if path.exists():
@@ -124,7 +125,7 @@ def find_lyrics_for(original: Path, cfg: dict[str, Any], total_tracks: int) -> P
         str((INPUT_DIR / f"{stem}.txt").relative_to(ROOT)),
     ]
     raise RuntimeError(
-        f"No lyrics found for '{original.name}'. Create " + " or ".join(expected)
+        f"No target lyrics found for '{original.name}'. Create " + " or ".join(expected)
     )
 
 
