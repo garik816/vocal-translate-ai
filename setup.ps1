@@ -33,10 +33,13 @@ function Has-Command([string]$Name) {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Invoke-UvArgs([string[]]$Args, [int]$Retries = 3) {
+function Invoke-UvArgs([string[]]$UvArgs, [int]$Retries = 3) {
+    if (-not $UvArgs -or $UvArgs.Count -eq 0) {
+        throw 'Internal error: Invoke-UvArgs received an empty argument list.'
+    }
     for ($i = 1; $i -le $Retries; $i++) {
-        Write-Host "uv $($Args -join ' ')"
-        & uv @Args
+        Write-Host "uv $($UvArgs -join ' ')"
+        & uv @UvArgs
         if ($LASTEXITCODE -eq 0) {
             return
         }
@@ -45,12 +48,16 @@ function Invoke-UvArgs([string[]]$Args, [int]$Retries = 3) {
             Start-Sleep -Seconds (3 * $i)
         }
     }
-    throw "uv command failed after $Retries attempts: uv $($Args -join ' ')"
+    throw "uv command failed after $Retries attempts: uv $($UvArgs -join ' ')"
 }
 
-function Try-UvArgs([string[]]$Args) {
-    Write-Host "uv $($Args -join ' ')"
-    & uv @Args
+function Try-UvArgs([string[]]$UvArgs) {
+    if (-not $UvArgs -or $UvArgs.Count -eq 0) {
+        Write-Warning 'Try-UvArgs received an empty argument list.'
+        return $false
+    }
+    Write-Host "uv $($UvArgs -join ' ')"
+    & uv @UvArgs
     return ($LASTEXITCODE -eq 0)
 }
 
