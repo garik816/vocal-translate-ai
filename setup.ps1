@@ -289,6 +289,12 @@ try {
         throw 'Failed to build OpenUtau headless renderer.'
     }
 
+    Write-Host '[OpenUtau] Probing Ukrainian DiffSinger runtime...'
+    & dotnet $HeadlessDll --probe $DiffSingerRoot 'Nero'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'OpenUtau/DiffSinger probe failed. See logs\setup.log.'
+    }
+
     Set-Content -Path (Join-Path $Runtime '.last_setup_ok') -Value (Get-Date -Format o) -Encoding ascii
     Write-Host ''
     Write-Host 'V7 SETUP / VERIFY COMPLETE.' -ForegroundColor Green
