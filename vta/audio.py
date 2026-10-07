@@ -142,6 +142,43 @@ def build_instrumental(stems: dict[str, Path], track_work: Path, ffmpeg: str) ->
     return output
 
 
+def build_cover_source(stems: dict[str, Path], instrumental: Path,
+                       track_work: Path, ffmpeg: str,
+                       cfg: dict[str, Any]) -> Path:
+    mode = str(cfg.get("ace_source_mode", "full_mix")).lower()
+    if mode != "delexicalized_mix":
+        return instrumental
+
+    output = track_work / "ace_cover_source.wav"
+    cutoff = int(cfg.get("cover_source_lowpass_hz", 450))
+
+    # Remove most consonant/formant detail from the original vocal while
+    # retaining its F0/rhythm as a neutral melody carrier. This reduces
+    # source-language leakage into the translated pronunciation.
+    filt = (
+        f"[1:a]highpass=f=70,lowpass=f={cutoff},volume=-3dB[mel];"
+        "[0:a][mel]amix=inputs=2:duration=longest:normalize=0,"
+        "alimiter=limit=0.98:level=false[out]"
+    )
+    run_logged(
+        [
+            ffmpeg, "-y",
+            "-i", str(instrumental),
+            "-i", str(stems["vocals"]),
+            "-filter_complex", filt,
+            "-map", "[out]",
+            "-c:a", "pcm_s24le",
+            str(output),
+        ],
+        LOG_DIR / "ffmpeg.log",
+    )
+    log(
+        f"[ACE] Built delexicalized cover source "
+        f"(vocal low-pass {cutoff} Hz)."
+    )
+    return output
+
+
 def build_reference(vocals: Path, track_work: Path, ffmpeg: str,
                     cfg: dict[str, Any], original: Path) -> Path:
     per_track = INPUT_DIR / "reference" / f"{original.stem}.wav"
@@ -175,6 +212,38 @@ def build_reference(vocals: Path, track_work: Path, ffmpeg: str,
     )
     log(f"[Reference] Auto reference created: {output.name}")
     return output
+
+
+def render_guide_preview(cfg: dict[str, Any], original: Path,
+                         instrumental: Path, vocal: Path,
+                         track_work: Path, ffmpeg: str,
+                         out_dir: Path) -> Path:
+    vg = float(cfg.get("mix_vocal_gain_db", 0.0))
+    ig = float(cfg.get("mix_instrumental_gain_db", 0.0))
+    bitrate = str(cfg.get("output_bitrate", "320k"))
+    lang = str(cfg.get("vocal_language", "uk"))
+    final = out_dir / f"{original.stem}_{lang}_guide.mp3"
+    filt = (
+        f"[0:a]volume={ig}dB[inst];"
+        f"[1:a]volume={vg}dB[voc];"
+        "[inst][voc]amix=inputs=2:duration=longest:normalize=0,"
+        "alimiter=limit=0.98:level=false[out]"
+    )
+    run_logged(
+        [
+            ffmpeg, "-y",
+            "-i", str(instrumental),
+            "-i", str(vocal),
+            "-filter_complex", filt,
+            "-map", "[out]",
+            "-c:a", "libmp3lame",
+            "-b:a", bitrate,
+            str(final),
+        ],
+        LOG_DIR / "ffmpeg.log",
+    )
+    log(f"[Output] Guide preview (before Seed-VC): {final}")
+    return final
 
 
 def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
