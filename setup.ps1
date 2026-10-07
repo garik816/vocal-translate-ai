@@ -272,9 +272,16 @@ try {
     $VoiceUrl = 'https://github.com/lunaiproject/lunai_singers/releases/download/170/Nero_v170.zip'
     $NeroInstall = Join-Path $DiffSingerRoot 'Nero_v170'
 
-    $VoiceCharacter = Get-ChildItem -Path $DiffSingerRoot -Recurse -Filter 'character.txt' -ErrorAction SilentlyContinue |
-        Where-Object { Test-Path (Join-Path $_.DirectoryName 'dsconfig.yaml') } |
-        Select-Object -First 1
+    # Only accept the proper SingerHub-style installation under Nero_v170.
+    # Older v7 builds extracted the archive directly into runtime\diffsinger
+    # (for example runtime\diffsinger\configs), which OpenUtau did not
+    # reliably discover as the intended singer.
+    $VoiceCharacter = $null
+    if (Test-Path $NeroInstall) {
+        $VoiceCharacter = Get-ChildItem -Path $NeroInstall -Recurse -Filter 'character.txt' -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.DirectoryName 'dsconfig.yaml') } |
+            Select-Object -First 1
+    }
 
     if ($ForceRepair -or -not $VoiceCharacter) {
         if (-not (Test-Path $VoiceZip)) {
@@ -305,6 +312,8 @@ try {
     }
 
     Write-Host "[DiffSinger] Voicebank ready: $($VoiceCharacter.DirectoryName)"
+    Write-Host "[DiffSinger] character.txt: $($VoiceCharacter.FullName)"
+    Write-Host "[DiffSinger] dsconfig.yaml: $(Join-Path $VoiceCharacter.DirectoryName 'dsconfig.yaml')"
 
     # Build the tiny console renderer against OpenUtau-Lunai Core.
     Write-Host '[OpenUtau] Building headless renderer...'
