@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .common import INPUT_DIR, LOG_DIR, ROOT, ace_python, log, run_logged
+from .common import INPUT_DIR, LOG_DIR, ROOT, seed_python, log, run_logged
 
 
 def locate_stems(root: Path) -> dict[str, Path]:
@@ -58,7 +58,7 @@ def run_demucs(original: Path, track_work: Path, cfg: dict[str, Any]) -> dict[st
 
     model = str(cfg.get("demucs_model", "htdemucs"))
     cmd = [
-        str(ace_python()), "-m", "demucs",
+        str(seed_python()), "-m", "demucs",
         "-n", model,
         "-o", str(separated),
     ]
@@ -98,7 +98,7 @@ def isolate_guide_vocals(guides: list[Path], track_work: Path,
 
         log(f"[Demucs] Isolating vocals from ACE guide {index}/{len(guides)}...")
         cmd = [
-            str(ace_python()), "-m", "demucs",
+            str(seed_python()), "-m", "demucs",
             "-n", model,
             "--two-stems", "vocals",
             "-o", str(work),
@@ -178,6 +178,48 @@ def build_cover_source(stems: dict[str, Path], instrumental: Path,
     )
     return output
 
+
+
+def extend_instrumental_for_repeat(
+    instrumental: Path,
+    repeat_plan: dict[str, Any] | None,
+    track_work: Path,
+    ffmpeg: str,
+) -> Path:
+    if not repeat_plan or not repeat_plan.get("enabled"):
+        return instrumental
+
+    source_start = float(repeat_plan["source_start"])
+    source_end = float(repeat_plan["source_end"])
+    dest_start = float(repeat_plan["dest_start"])
+    if source_end <= source_start or dest_start <= 0:
+        return instrumental
+
+    output = track_work / "instrumental_extended.wav"
+    filt = (
+        f"[0:a]atrim=start=0:end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
+        f"[0:a]atrim=start={source_start:.6f}:end={source_end:.6f},"
+        "asetpts=PTS-STARTPTS[rep];"
+        "[pre][rep]concat=n=2:v=0:a=1,"
+        "apad=pad_dur=0.8,"
+        "alimiter=limit=0.98:level=false[out]"
+    )
+    run_logged(
+        [
+            ffmpeg, "-y",
+            "-i", str(instrumental),
+            "-filter_complex", filt,
+            "-map", "[out]",
+            "-c:a", "pcm_s24le",
+            str(output),
+        ],
+        LOG_DIR / "ffmpeg.log",
+    )
+    log(
+        "[Structure] Instrumental extended with the previous chorus "
+        f"({source_start:.2f}-{source_end:.2f}s)."
+    )
+    return output
 
 def build_reference(vocals: Path, track_work: Path, ffmpeg: str,
                     cfg: dict[str, Any], original: Path) -> Path:
