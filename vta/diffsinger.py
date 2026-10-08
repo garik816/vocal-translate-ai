@@ -38,7 +38,7 @@ def render_ukrainian_guide(
 
     out_dir = track_work / "diffsinger"
     guide = out_dir / "guide_uk.wav"
-    singer_hint = str(cfg.get("diffsinger_singer", "Nero"))
+    singer_hint = str(cfg.get("diffsinger_singer", "Amaboshi Cipher"))
     steps = int(cfg.get("diffsinger_steps", 30))
 
     cmd = [
