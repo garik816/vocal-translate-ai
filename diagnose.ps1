@@ -44,7 +44,7 @@ if (Test-Path $Headless) {
     Add-Line 'OpenUtau headless: OK'
     $SingerRootProbe = Join-Path $Root 'runtime\diffsinger'
     Add-Line '--- OpenUtau / DiffSinger probe ---'
-    & dotnet $Headless --probe $SingerRootProbe 'Nero' 2>&1 | Tee-Object -FilePath $Log -Append
+    & dotnet $Headless --probe $SingerRootProbe 'Amaboshi' 2>&1 | Tee-Object -FilePath $Log -Append
     Add-Line "OpenUtau probe exit code: $LASTEXITCODE"
 } else {
     Add-Line 'OpenUtau headless: MISSING'
