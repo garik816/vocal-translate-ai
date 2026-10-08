@@ -1,4 +1,4 @@
-# Vocal Translate AI v7.2.0
+# Vocal Translate AI v7.3.0
 
 Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
 
@@ -198,3 +198,17 @@ F0 extraction --------------------------------^
 ```
 
 This prevents instrument leakage in a Demucs vocal stem from creating fake lyric notes during intros/interludes. Instrumental gaps remain instrumental. Pitch extraction is now used only to choose the pitch of each ASR-anchored syllable note.
+
+
+## v7.3 pronunciation fix
+
+v7.2 still split Ukrainian target words into orthographic syllable fragments before handing them to the Ukrainian G2P. That made DiffSinger pronounce fragments as standalone lexical items and caused the broken/chopped diction heard in the guide.
+
+v7.3 changes the synthesis unit to a **whole Ukrainian word**:
+
+```text
+Whisper source-word timing -> target line -> target whole words
+F0                         -> pitch only
+```
+
+Each target word is sent intact to the Ukrainian phonemizer. Section timing is also solved independently for Verse/Chorus blocks using the strongest pauses in the original vocal, so a chorus cannot expand across an interlude or into the next verse.
