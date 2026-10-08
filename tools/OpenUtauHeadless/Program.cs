@@ -3,6 +3,7 @@ using OpenUtau.Classic;
 using OpenUtau.Core;
 using OpenUtau.Core.DiffSinger;
 using OpenUtau.Core.Format;
+using OpenUtau.Core.Pipeline;
 using OpenUtau.Core.Render;
 using OpenUtau.Core.Ustx;
 using OpenUtau.Core.Util;
@@ -235,16 +236,66 @@ static class Program {
             + $"{voiceParts.Count} voice part(s), "
             + $"{voiceParts.Sum(p => p.notes.Count)} note(s).");
 
+        // The normal GUI uses a background PhraseSourceBuilder. In the headless
+        // host its completion callback is another UI-scheduler hop and was
+        // stalling indefinitely even after phonemization completed. Disable that
+        // worker so UVoicePart.Validate() builds phrases inline when the async
+        // phonemizer response lands.
+        PhraseSourceBuilder.Current?.Dispose();
+        Console.WriteLine("[OpenUtau] Headless phrase builder: synchronous");
+
         // Trigger phonemization exactly once. Re-validating with
         // SkipPhonemizer=false in a polling loop changes notesTimestamp on every
         // pass, making valid async responses stale before they can land.
         project.ValidateFull();
 
-        var deadline = DateTime.UtcNow.AddMinutes(5);
+        var deadline = DateTime.UtcNow.AddMinutes(2);
         var nextStatus = DateTime.UtcNow;
+        bool forcedPhraseValidation = false;
+        bool printedPhonemeErrors = false;
+
         while (DateTime.UtcNow < deadline) {
             bool phonemesReady = voiceParts.All(p => p.PhonemesUpToDate);
             bool phrasesReady = voiceParts.All(p => p.renderPhrases.Count > 0);
+
+            if (phonemesReady && !forcedPhraseValidation) {
+                // One explicit post-phonemizer validation guarantees that the
+                // synchronous PhraseSource path runs in this CLI host.
+                project.Validate(new ValidateOptions {
+                    SkipTiming = true,
+                    SkipPhonemizer = true,
+                    SkipPhoneme = false,
+                });
+                forcedPhraseValidation = true;
+                phrasesReady = voiceParts.All(p => p.renderPhrases.Count > 0);
+            }
+
+            if (phonemesReady && !printedPhonemeErrors) {
+                int total = voiceParts.Sum(p => p.phonemes.Count);
+                int errors = voiceParts.Sum(p => p.phonemes.Count(ph => ph.Error));
+                int valid = total - errors;
+                Console.WriteLine(
+                    $"[OpenUtau] Phonemes: total={total}, valid={valid}, errors={errors}");
+
+                if (errors > 0) {
+                    foreach (var ph in voiceParts
+                        .SelectMany(p => p.phonemes)
+                        .Where(ph => ph.Error)
+                        .Take(10)) {
+                        Console.WriteLine(
+                            $"[OpenUtau] Phoneme error: '{ph.phoneme}' "
+                            + $"{ph.ErrorException?.Message ?? "(unknown)"}");
+                    }
+                }
+                printedPhonemeErrors = true;
+
+                if (valid == 0) {
+                    Console.Error.WriteLine(
+                        "Ukrainian phonemization completed, but every phoneme "
+                        + "is invalid for the selected DiffSinger voicebank.");
+                    return 9;
+                }
+            }
 
             if (phonemesReady && phrasesReady) {
                 break;
