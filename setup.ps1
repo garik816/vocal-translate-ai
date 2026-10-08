@@ -319,6 +319,17 @@ try {
         throw 'Failed to build OpenUtau headless renderer.'
     }
 
+    # OpenUtau portable SDK builds keep runtime data next to the Release
+    # configuration folder. Create Cache up front so DiffSinger tensor-cache
+    # writes cannot fail on the first render.
+    $HeadlessReleaseDir = Split-Path (Split-Path $HeadlessDll -Parent) -Parent
+    $OpenUtauData = Join-Path $HeadlessReleaseDir 'OpenUtau-Lunai-Data'
+    New-Item -ItemType Directory -Force -Path $OpenUtauData | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $OpenUtauData 'Cache') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $OpenUtauData 'Logs') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $OpenUtauData 'Singers') | Out-Null
+    Write-Host "[OpenUtau] Headless cache ready: $(Join-Path $OpenUtauData 'Cache')"
+
     Write-Host '[OpenUtau] Probing Ukrainian DiffSinger runtime...'
     & dotnet $HeadlessDll --probe $DiffSingerRoot $VoiceHint
     if ($LASTEXITCODE -ne 0) {
