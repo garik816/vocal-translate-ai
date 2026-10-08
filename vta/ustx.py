@@ -555,27 +555,115 @@ def _tone_for_interval(
     return fallback
 
 
+def _stabilize_tone(
+    raw_tone: int,
+    previous_tone: int,
+) -> int:
+    """Fold obvious octave-tracking errors without flattening real melody."""
+    raw_tone = int(max(24, min(96, raw_tone)))
+    previous_tone = int(max(24, min(96, previous_tone)))
+
+    if abs(raw_tone - previous_tone) < 9:
+        return raw_tone
+
+    candidates = [
+        tone
+        for tone in (raw_tone - 12, raw_tone, raw_tone + 12)
+        if 36 <= tone <= 84
+    ]
+    if not candidates:
+        return raw_tone
+
+    best = min(candidates, key=lambda tone: abs(tone - previous_tone))
+    if abs(best - previous_tone) + 3 < abs(raw_tone - previous_tone):
+        return best
+    return raw_tone
+
+
+def _word_syllable_intervals(
+    line: str,
+    timing: LineTiming,
+) -> list[tuple[str, int, float, float]]:
+    """Return one timing cell per target syllable, grouped by whole word.
+
+    The first note of a word carries the complete Ukrainian word. Following
+    syllable notes are marked with '+' so OpenUtau keeps them in one phonemizer
+    word group. The Ukrainian G2P therefore sees the intact word exactly once.
+    """
+    target_words = words_for_line(line)
+    if not target_words:
+        return []
+
+    cells = _source_syllable_cells(timing.words)
+    weights = [target_syllables(word) for word in target_words]
+    total_syllables = sum(weights)
+    if total_syllables <= 0:
+        return []
+
+    result: list[tuple[str, int, float, float]] = []
+    global_index = 0
+
+    for word, syllable_count in zip(target_words, weights):
+        for syllable_index in range(syllable_count):
+            start_fraction = global_index / total_syllables
+            end_fraction = (global_index + 1) / total_syllables
+            start = _time_at_cell_fraction(cells, start_fraction)
+            end = _time_at_cell_fraction(cells, end_fraction)
+
+            if end - start < 0.08:
+                end = start + 0.08
+
+            result.append((word, syllable_index, start, end))
+            global_index += 1
+
+    if result:
+        word, idx, _, end = result[0]
+        result[0] = (word, idx, timing.start, end)
+        word, idx, start, _ = result[-1]
+        result[-1] = (word, idx, start, timing.end)
+
+    return result
+
+
 def _build_word_notes(
     line: str,
     timing: LineTiming,
     source_notes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    intervals = _target_word_intervals(line, timing)
+    syllable_intervals = _word_syllable_intervals(line, timing)
     out: list[dict[str, Any]] = []
     previous_tone = 60
+    previous_word: str | None = None
 
-    for lyric, start, end in intervals:
-        tone = _tone_for_interval(start, end, source_notes, fallback=previous_tone)
+    for word, syllable_index, start, end in syllable_intervals:
+        raw_tone = _tone_for_interval(
+            start,
+            end,
+            source_notes,
+            fallback=previous_tone,
+        )
+        tone = _stabilize_tone(raw_tone, previous_tone)
         previous_tone = tone
+
+        # Whole word is sent to G2P on the first note. Plain '+' is an
+        # OpenUtau continuation note that stays inside the same word group and
+        # counts as the next syllable. Do NOT use '+~' here: +~ is a vowel
+        # melisma extension, not the next lexical syllable.
+        lyric = word if syllable_index == 0 else "+"
+
         out.append({
             "start": start,
             "end": end,
             "midi": tone,
             "midi_float": float(tone),
-            # Critical v7.3 change: whole Ukrainian word goes to G2P.
             "lyric": lyric,
+            "word": word,
+            "syllable_index": syllable_index,
         })
+        previous_word = word
+
     return out
+
 
 
 def _shift_timing(timing: LineTiming, shift: float) -> LineTiming:
@@ -754,7 +842,7 @@ def build_ustx(
                     str(w.get("word", "")) for w in timing.words
                 ],
                 "target_words": words_for_line(line),
-                "generated_word_notes": len(notes),
+                "generated_syllable_notes": len(notes),
             })
 
         debug_sections.append({
@@ -850,7 +938,7 @@ def build_ustx(
     ]
 
     if not ustx_notes:
-        raise RuntimeError("v7.3 generated no target-word notes.")
+        raise RuntimeError("v7.4 generated no target syllable notes.")
 
     end_tick = max(
         note["position"] + note["duration"]
@@ -860,7 +948,7 @@ def build_ustx(
     project = {
         "name": "Vocal Translate AI - Ukrainian Guide",
         "comment": (
-            "v7.3: whole-word Ukrainian G2P, section-aware ASR timing. "
+            "v7.4: whole-word Ukrainian G2P with syllable-note groups, section-aware ASR timing. "
             "Source lyrics file is never modified."
         ),
         "output_dir": "Vocal",
@@ -917,11 +1005,11 @@ def build_ustx(
     )
 
     alignment = {
-        "mode": "v7.3_section_aware_whole_word",
+        "mode": "v7.4_whole_word_syllable_groups",
         "sections": debug_sections,
         "repeat_plan": repeat_plan,
         "source_f0_note_count": len(source_notes),
-        "generated_target_word_notes": len(ustx_notes),
+        "generated_target_syllable_notes": len(ustx_notes),
     }
     (out_dir / "alignment.json").write_text(
         json.dumps(alignment, ensure_ascii=False, indent=2),
@@ -929,7 +1017,7 @@ def build_ustx(
     )
 
     log(
-        "[DiffSinger] v7.3 whole-word USTX generated: "
-        f"{len(ustx_notes)} word notes -> {ustx_path}"
+        "[DiffSinger] v7.4 grouped-word USTX generated: "
+        f"{len(ustx_notes)} syllable notes -> {ustx_path}"
     )
     return ustx_path, repeat_plan
