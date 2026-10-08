@@ -6,7 +6,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from vta import asr, audio, diffsinger, melody, seed
+from vta import __version__, asr, audio, diffsinger, melody, seed
 from vta.common import (
     LOG_DIR,
     OUT_DIR,
@@ -154,7 +154,7 @@ def main() -> int:
     ffmpeg = find_ffmpeg()
     require(SEED_DIR, "Seed-VC runtime")
 
-    log("=== Vocal Translate AI v7: Ukrainian DiffSinger ===")
+    log(f"=== Vocal Translate AI v{__version__}: Ukrainian DiffSinger ===")
     log(f"Tracks found: {len(originals)}")
     log(f"Mode: {'extract-only' if args.extract_only else 'full pipeline'}")
 
