@@ -1,4 +1,4 @@
-# Vocal Translate AI v7.3.1
+# Vocal Translate AI v7.4.0
 
 Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
 
@@ -223,3 +223,20 @@ v7.3.1:
 - partitions Verse/Chorus sections with dynamic programming using target syllable weight and source pauses;
 - enforces enough source words for every target line;
 - detects when chorus 2 and the extra final chorus were written under one heading, splits them, and uses chorus 2 as the repeat template.
+
+
+## v7.4 pronunciation / melody refinement
+
+v7.3 fixed G2P by passing complete Ukrainian words, but it still placed an entire multi-syllable word on one pitch note. That made diction recognizable but robotic and blurred word stress.
+
+v7.4 keeps the whole word as one OpenUtau phonemizer group while giving each syllable its own note:
+
+```text
+сміттєвий   +   +
+   |        |   |
+ syllable1  2   3
+```
+
+Only the first note contains the complete Ukrainian word; continuation notes use OpenUtau `+`, so Ukrainian G2P receives the intact lexical word exactly once and DiffSinger distributes its phonemes across the syllable notes.
+
+F0 is sampled separately for each syllable note, with conservative octave-error folding to reduce obvious pitch-tracker jumps.
