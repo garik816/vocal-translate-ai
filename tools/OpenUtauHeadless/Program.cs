@@ -28,6 +28,17 @@ static class Program {
     static void ConfigureOpenUtau(string singersRoot, int steps) {
         Directory.CreateDirectory(singersRoot);
 
+        // A normal OpenUtau GUI start creates its portable data/cache folders
+        // before DiffSinger runs. The headless host must do the same; otherwise
+        // DiffSingerCache.Save() fails on the first tensor-cache write.
+        Directory.CreateDirectory(PathManager.Inst.DataPath);
+        Directory.CreateDirectory(PathManager.Inst.CachePath);
+        Directory.CreateDirectory(PathManager.Inst.LogsPath);
+        Directory.CreateDirectory(PathManager.Inst.SingersPath);
+
+        Console.WriteLine($"[OpenUtau] Data path:  {PathManager.Inst.DataPath}");
+        Console.WriteLine($"[OpenUtau] Cache path: {PathManager.Inst.CachePath}");
+
         Preferences.Default.AdditionalSingerPath = singersRoot;
         Preferences.Default.LoadDeepFolderSinger = true;
         Preferences.Default.DiffSingerSteps = steps;
