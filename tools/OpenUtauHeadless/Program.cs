@@ -101,17 +101,7 @@ static class Program {
                     singerHint, StringComparison.OrdinalIgnoreCase)
                 || (s.Id ?? string.Empty).Contains(
                     singerHint, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(s => {
-                try {
-                    string location = Path.GetFullPath(s.Location ?? string.Empty);
-                    return location.Contains(
-                        Path.Combine("Nero_v170", "configs"),
-                        StringComparison.OrdinalIgnoreCase);
-                } catch {
-                    return false;
-                }
-            })
-            .ThenByDescending(s => (s.Id ?? string.Empty).Length)
+            .OrderByDescending(s => (s.Id ?? string.Empty).Length)
             .FirstOrDefault();
 
         if (hinted != null) {
