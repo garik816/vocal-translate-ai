@@ -37,7 +37,7 @@
   "mix_instrumental_gain_db": 0,
   "output_bitrate": "320k",
   "write_guide_preview": true,
-  "quality_profile": "v7.2_asr_syllable_alignment",
-  "alignment_mode": "asr_word_timing",
+  "quality_profile": "v7.3_whole_word_section_alignment",
+  "alignment_mode": "section_aware_whole_word",
   "asr_outro_gap_s": 4
 }
