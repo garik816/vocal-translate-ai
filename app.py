@@ -44,6 +44,7 @@ def process_track(
     ffmpeg: str,
     total_tracks: int,
     extract_only: bool,
+    guide_only: bool,
 ) -> list[Path]:
     track_work = WORK_DIR / original.stem
     track_work.mkdir(parents=True, exist_ok=True)
@@ -96,8 +97,9 @@ def process_track(
         ffmpeg=ffmpeg,
     )
 
-    if cfg.get("write_guide_preview", True):
-        audio.render_guide_preview(
+    guide_preview = None
+    if cfg.get("write_guide_preview", True) or guide_only:
+        guide_preview = audio.render_guide_preview(
             cfg,
             original,
             final_instrumental,
@@ -106,6 +108,10 @@ def process_track(
             ffmpeg,
             OUT_DIR,
         )
+
+    if guide_only:
+        log("[Mode] Guide-only complete; Seed-VC skipped.")
+        return [guide_preview] if guide_preview is not None else []
 
     if cfg.get("seed_vc_enabled", True):
         converted = seed.convert(
@@ -143,6 +149,11 @@ def main() -> int:
         action="store_true",
         help="Only extract source lyrics/timings from input MP3 files.",
     )
+    parser.add_argument(
+        "--guide-only",
+        action="store_true",
+        help="Render DiffSinger guide preview and stop before Seed-VC.",
+    )
     args = parser.parse_args()
 
     for path in (LOG_DIR, OUT_DIR, WORK_DIR):
@@ -156,7 +167,14 @@ def main() -> int:
 
     log(f"=== Vocal Translate AI v{__version__}: Ukrainian DiffSinger ===")
     log(f"Tracks found: {len(originals)}")
-    log(f"Mode: {'extract-only' if args.extract_only else 'full pipeline'}")
+    mode = (
+        "extract-only"
+        if args.extract_only
+        else "guide-only"
+        if args.guide_only
+        else "full pipeline"
+    )
+    log(f"Mode: {mode}")
 
     successes: list[tuple[Path, list[Path]]] = []
     failures: list[tuple[Path, Exception]] = []
@@ -170,6 +188,7 @@ def main() -> int:
                 ffmpeg=ffmpeg,
                 total_tracks=len(originals),
                 extract_only=args.extract_only,
+                guide_only=args.guide_only,
             )
             successes.append((original, outputs))
         except Exception as exc:
