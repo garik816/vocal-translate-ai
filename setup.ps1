@@ -315,6 +315,15 @@ try {
     Write-Host "[DiffSinger] character.txt: $($VoiceCharacter.FullName)"
     Write-Host "[DiffSinger] dsconfig.yaml: $(Join-Path $VoiceCharacter.DirectoryName 'dsconfig.yaml')"
 
+    # Remove the duplicate legacy candidate created by early v7 builds.
+    # The valid SingerHub-style copy lives under Nero_v170\configs.
+    $LegacyNeroConfig = Join-Path $DiffSingerRoot 'configs'
+    if ((Test-Path (Join-Path $LegacyNeroConfig 'character.txt')) -and
+        (Test-Path (Join-Path $LegacyNeroConfig 'dsconfig.yaml'))) {
+        Write-Host "[DiffSinger] Removing obsolete duplicate singer: $LegacyNeroConfig"
+        Remove-Item -LiteralPath $LegacyNeroConfig -Recurse -Force
+    }
+
     # Build the tiny console renderer against OpenUtau-Lunai Core.
     Write-Host '[OpenUtau] Building headless renderer...'
     & dotnet build $HeadlessProject -c Release --nologo
