@@ -92,7 +92,7 @@ The extracted source text is used for alignment/timing support. It never silentl
 
 v7 uses OpenUtau-Lunai because it contains a native `DiffSingerUkrainianPhonemizer`.
 
-The default guide voice is **Nero v170**. Its timbre is only an intermediate guide; Seed-VC then transfers the source singer's timbre.
+The default guide voice is **Amaboshi Cipher v170**, because this voicebank explicitly supports Ukrainian. Its timbre is only an intermediate guide; Seed-VC then transfers the source singer's timbre.
 
 Generated diagnostics:
 
@@ -140,7 +140,7 @@ The first run needs Internet for:
 - Demucs model;
 - Whisper model;
 - OpenUtau-Lunai source/build dependencies;
-- Nero DiffSinger voicebank;
+- Amaboshi Cipher DiffSinger voicebank;
 - Python/.NET dependencies.
 
 After these assets are cached locally, normal synthesis is local.
@@ -174,3 +174,8 @@ Audio, lyrics, generated output, downloaded models, runtime environments and log
 ## Rights
 
 For publication or commercial use, make sure you have the necessary rights for the song and any real person's voice likeness.
+
+
+## Why Nero was replaced
+
+Early v7 builds used Nero v170. OpenUtau loaded Nero correctly, but the Ukrainian phonemizer produced phonemes that Nero could not map: the whole phrase validated as errors. Amaboshi Cipher v170 is used instead because its multilingual DiffSinger release includes Ukrainian support.
