@@ -264,65 +264,53 @@ try {
         Write-Host '[OpenUtau] Existing repository found. No automatic git pull.'
     }
 
-    # Download one neutral male DiffSinger guide voice. Seed-VC replaces its timbre later.
-    # IMPORTANT: OpenUtau SingerHub installs every LUNAI archive into its own child
-    # folder. Extracting archive contents directly into AdditionalSingerPath makes
-    # the singer invisible to VoicebankLoader even if dsconfig.yaml exists.
-    $VoiceZip = Join-Path $Downloads 'Nero_v170.zip'
-    $VoiceUrl = 'https://github.com/lunaiproject/lunai_singers/releases/download/170/Nero_v170.zip'
-    $NeroInstall = Join-Path $DiffSingerRoot 'Nero_v170'
+    # Install a DiffSinger guide voice that explicitly supports Ukrainian.
+    # Nero v170 loads correctly, but its phoneme inventory does not support the
+    # Ukrainian phonemizer: all generated phonemes validate as errors. Amaboshi
+    # Cipher v170 is multilingual and includes Ukrainian support.
+    $VoiceName = 'Amaboshi Cipher'
+    $VoiceHint = 'Amaboshi'
+    $VoiceArchiveName = 'Amaboshi_Cipher_v170.zip'
+    $VoiceFolderName = 'Amaboshi_Cipher_v170'
+    $VoiceZip = Join-Path $Downloads $VoiceArchiveName
+    $VoiceUrl = 'https://github.com/lunaiproject/lunai_singers/releases/download/170/Amaboshi_Cipher_v170.zip'
+    $VoiceInstall = Join-Path $DiffSingerRoot $VoiceFolderName
 
-    # Only accept the proper SingerHub-style installation under Nero_v170.
-    # Older v7 builds extracted the archive directly into runtime\diffsinger
-    # (for example runtime\diffsinger\configs), which OpenUtau did not
-    # reliably discover as the intended singer.
     $VoiceCharacter = $null
-    if (Test-Path $NeroInstall) {
-        $VoiceCharacter = Get-ChildItem -Path $NeroInstall -Recurse -Filter 'character.txt' -ErrorAction SilentlyContinue |
+    if (Test-Path $VoiceInstall) {
+        $VoiceCharacter = Get-ChildItem -Path $VoiceInstall -Recurse -Filter 'character.txt' -ErrorAction SilentlyContinue |
             Where-Object { Test-Path (Join-Path $_.DirectoryName 'dsconfig.yaml') } |
             Select-Object -First 1
     }
 
     if ($ForceRepair -or -not $VoiceCharacter) {
         if (-not (Test-Path $VoiceZip)) {
-            Write-Host '[DiffSinger] Downloading Nero v170 voicebank (~433 MB)...'
+            Write-Host "[DiffSinger] Downloading Ukrainian-capable $VoiceName voicebank..."
             Download-File $VoiceUrl $VoiceZip
         } else {
-            Write-Host '[DiffSinger] Reusing already downloaded Nero_v170.zip.'
+            Write-Host "[DiffSinger] Reusing already downloaded $VoiceArchiveName."
         }
 
-        # Repair the old v7 layout that extracted the archive directly into
-        # runtime\diffsinger. Re-extract from the cached ZIP into a proper
-        # singer child folder; no model re-download is required.
-        if (Test-Path $NeroInstall) {
-            Remove-Item -LiteralPath $NeroInstall -Recurse -Force
+        if (Test-Path $VoiceInstall) {
+            Remove-Item -LiteralPath $VoiceInstall -Recurse -Force
         }
-        New-Item -ItemType Directory -Force -Path $NeroInstall | Out-Null
+        New-Item -ItemType Directory -Force -Path $VoiceInstall | Out-Null
 
-        Write-Host "[DiffSinger] Installing Nero into: $NeroInstall"
-        Expand-Archive -LiteralPath $VoiceZip -DestinationPath $NeroInstall -Force
+        Write-Host "[DiffSinger] Installing $VoiceName into: $VoiceInstall"
+        Expand-Archive -LiteralPath $VoiceZip -DestinationPath $VoiceInstall -Force
 
-        $VoiceCharacter = Get-ChildItem -Path $NeroInstall -Recurse -Filter 'character.txt' -ErrorAction SilentlyContinue |
+        $VoiceCharacter = Get-ChildItem -Path $VoiceInstall -Recurse -Filter 'character.txt' -ErrorAction SilentlyContinue |
             Where-Object { Test-Path (Join-Path $_.DirectoryName 'dsconfig.yaml') } |
             Select-Object -First 1
 
         if (-not $VoiceCharacter) {
-            throw 'Nero archive was extracted but no valid DiffSinger root (character.txt + dsconfig.yaml) was found.'
+            throw "$VoiceName archive was extracted but no valid DiffSinger root (character.txt + dsconfig.yaml) was found."
         }
     }
 
     Write-Host "[DiffSinger] Voicebank ready: $($VoiceCharacter.DirectoryName)"
     Write-Host "[DiffSinger] character.txt: $($VoiceCharacter.FullName)"
     Write-Host "[DiffSinger] dsconfig.yaml: $(Join-Path $VoiceCharacter.DirectoryName 'dsconfig.yaml')"
-
-    # Remove the duplicate legacy candidate created by early v7 builds.
-    # The valid SingerHub-style copy lives under Nero_v170\configs.
-    $LegacyNeroConfig = Join-Path $DiffSingerRoot 'configs'
-    if ((Test-Path (Join-Path $LegacyNeroConfig 'character.txt')) -and
-        (Test-Path (Join-Path $LegacyNeroConfig 'dsconfig.yaml'))) {
-        Write-Host "[DiffSinger] Removing obsolete duplicate singer: $LegacyNeroConfig"
-        Remove-Item -LiteralPath $LegacyNeroConfig -Recurse -Force
-    }
 
     # Build the tiny console renderer against OpenUtau-Lunai Core.
     Write-Host '[OpenUtau] Building headless renderer...'
@@ -332,7 +320,7 @@ try {
     }
 
     Write-Host '[OpenUtau] Probing Ukrainian DiffSinger runtime...'
-    & dotnet $HeadlessDll --probe $DiffSingerRoot 'Nero'
+    & dotnet $HeadlessDll --probe $DiffSingerRoot $VoiceHint
     if ($LASTEXITCODE -ne 0) {
         throw 'OpenUtau/DiffSinger probe failed. See logs\setup.log.'
     }
