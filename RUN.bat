@@ -5,7 +5,7 @@ chcp 65001 >nul
 if not exist "logs" mkdir "logs"
 
 echo ============================================================
-echo Vocal Translate AI v7.4.0.1
+echo Vocal Translate AI v7.5.0.1
 echo MP3 + Ukrainian lyrics -^> DiffSinger -^> Seed-VC -^> MP3
 echo ============================================================
 echo.
