@@ -172,11 +172,37 @@ def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
     return words
 
 
+def _trim_trailing_outro_words(
+    words: list[dict[str, Any]],
+    gap_s: float,
+) -> list[dict[str, Any]]:
+    if len(words) < 6 or gap_s <= 0:
+        return words
+
+    cut = None
+    for i in range(1, len(words)):
+        gap = float(words[i]["start"]) - float(words[i - 1]["end"])
+        tail_ratio = (len(words) - i) / len(words)
+        if gap >= gap_s and tail_ratio <= 0.25:
+            cut = i
+
+    if cut is not None:
+        log(
+            "[Alignment] Ignoring trailing ASR outro after "
+            f"{words[cut - 1]['end']:.2f}s; "
+            f"gap={words[cut]['start'] - words[cut - 1]['end']:.2f}s, "
+            f"tail_words={len(words) - cut}."
+        )
+        return words[:cut]
+    return words
+
+
 def align_lines_to_asr_words(
     lines: list[str],
     asr: dict[str, Any] | None,
+    outro_gap_s: float = 4.0,
 ) -> list[LineTiming]:
-    words = _asr_words(asr)
+    words = _trim_trailing_outro_words(_asr_words(asr), outro_gap_s)
     if not lines:
         return []
     if not words:
@@ -484,7 +510,11 @@ def build_ustx(
     base_sections = sections[:-1] if final_repeat is not None else sections
     base_lines = [line for sec in base_sections for line in sec.lines]
 
-    timings = align_lines_to_asr_words(base_lines, asr)
+    timings = align_lines_to_asr_words(
+        base_lines,
+        asr,
+        outro_gap_s=float(cfg.get("asr_outro_gap_s", 4.0)),
+    )
     if len(timings) != len(base_lines):
         raise RuntimeError("Internal error: ASR line timing count mismatch.")
 
