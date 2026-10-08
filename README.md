@@ -1,4 +1,4 @@
-# Vocal Translate AI v7.3.0
+# Vocal Translate AI v7.3.1
 
 Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
 
@@ -212,3 +212,14 @@ F0                         -> pitch only
 ```
 
 Each target word is sent intact to the Ukrainian phonemizer. Section timing is also solved independently for Verse/Chorus blocks using the strongest pauses in the original vocal, so a chorus cannot expand across an interlude or into the next verse.
+
+
+## v7.3.1 section-alignment fix
+
+v7.3 used the globally largest ASR pauses as section boundaries. On the current source track, Whisper hallucinated a short five-word island inside the long instrumental break; this created an impossible section with only five source words for six target lyric lines.
+
+v7.3.1:
+- removes tiny isolated ASR islands inside long instrumental gaps;
+- partitions Verse/Chorus sections with dynamic programming using target syllable weight and source pauses;
+- enforces enough source words for every target line;
+- detects when chorus 2 and the extra final chorus were written under one heading, splits them, and uses chorus 2 as the repeat template.
