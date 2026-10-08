@@ -580,87 +580,325 @@ def _stabilize_tone(
     return raw_tone
 
 
-def _word_syllable_intervals(
+def _allocate_cells(
+    weights: list[int],
+    total_cells: int,
+) -> list[int] | None:
+    """Allocate contiguous source syllable cells with at least one per item."""
+    n = len(weights)
+    if n == 0:
+        return []
+    if total_cells < n:
+        return None
+
+    counts = [1] * n
+    remaining = total_cells - n
+    if remaining <= 0:
+        return counts
+
+    safe_weights = [max(1, int(w)) for w in weights]
+    total_weight = float(sum(safe_weights))
+    raw = [remaining * w / total_weight for w in safe_weights]
+    floors = [int(math.floor(x)) for x in raw]
+    for i, value in enumerate(floors):
+        counts[i] += value
+
+    left = remaining - sum(floors)
+    order = sorted(
+        range(n),
+        key=lambda i: raw[i] - floors[i],
+        reverse=True,
+    )
+    for i in order[:left]:
+        counts[i] += 1
+    return counts
+
+
+def _target_word_syllable_intervals(
     line: str,
     timing: LineTiming,
-) -> list[tuple[str, int, float, float]]:
-    """Return one timing cell per target syllable, grouped by whole word.
-
-    The first note of a word carries the complete Ukrainian word. Following
-    syllable notes are marked with '+' so OpenUtau keeps them in one phonemizer
-    word group. The Ukrainian G2P therefore sees the intact word exactly once.
-    """
+) -> list[tuple[str, list[tuple[float, float]]]]:
+    """Map target words/syllables onto whole source syllable timing cells."""
     target_words = words_for_line(line)
     if not target_words:
         return []
 
     cells = _source_syllable_cells(timing.words)
-    weights = [target_syllables(word) for word in target_words]
-    total_syllables = sum(weights)
-    if total_syllables <= 0:
+    if not cells:
         return []
 
-    result: list[tuple[str, int, float, float]] = []
-    global_index = 0
+    word_weights = [target_syllables(word) for word in target_words]
+    word_cell_counts = _allocate_cells(word_weights, len(cells))
 
-    for word, syllable_count in zip(target_words, weights):
-        for syllable_index in range(syllable_count):
-            start_fraction = global_index / total_syllables
-            end_fraction = (global_index + 1) / total_syllables
-            start = _time_at_cell_fraction(cells, start_fraction)
-            end = _time_at_cell_fraction(cells, end_fraction)
+    # Rare fallback when Whisper supplies fewer source syllable cells than
+    # target words. Preserve line edges but still keep each target word local.
+    if word_cell_counts is None:
+        out: list[tuple[str, list[tuple[float, float]]]] = []
+        total_weight = float(sum(word_weights))
+        acc = 0.0
+        for word, weight in zip(target_words, word_weights):
+            word_start = timing.start + (
+                (timing.end - timing.start) * acc / total_weight
+            )
+            acc += weight
+            word_end = timing.start + (
+                (timing.end - timing.start) * acc / total_weight
+            )
+            syllable_count = max(1, target_syllables(word))
+            syllables = []
+            for si in range(syllable_count):
+                a = word_start + (word_end - word_start) * si / syllable_count
+                b = word_start + (word_end - word_start) * (si + 1) / syllable_count
+                syllables.append((a, max(a + 0.08, b)))
+            out.append((word, syllables))
+        return out
 
-            if end - start < 0.08:
-                end = start + 0.08
+    out: list[tuple[str, list[tuple[float, float]]]] = []
+    cell_pos = 0
+    for word, word_cell_count in zip(target_words, word_cell_counts):
+        word_cells = cells[cell_pos:cell_pos + word_cell_count]
+        cell_pos += word_cell_count
 
-            result.append((word, syllable_index, start, end))
-            global_index += 1
+        syllable_count = max(1, target_syllables(word))
+        syllable_cell_counts = _allocate_cells(
+            [1] * syllable_count,
+            len(word_cells),
+        )
 
-    if result:
-        word, idx, _, end = result[0]
-        result[0] = (word, idx, timing.start, end)
-        word, idx, start, _ = result[-1]
-        result[-1] = (word, idx, start, timing.end)
+        if syllable_cell_counts is None:
+            word_start = float(word_cells[0][0])
+            word_end = float(word_cells[-1][1])
+            syllables = [
+                (
+                    word_start + (word_end - word_start) * si / syllable_count,
+                    word_start + (word_end - word_start) * (si + 1) / syllable_count,
+                )
+                for si in range(syllable_count)
+            ]
+            out.append((word, syllables))
+            continue
 
-    return result
+        cell_groups: list[list[tuple[float, float]]] = []
+        pos = 0
+        for count in syllable_cell_counts:
+            cell_groups.append(word_cells[pos:pos + count])
+            pos += count
+
+        # Keep the word continuous for OpenUtau grouping, but put syllable
+        # boundaries halfway across any source inter-cell gap.
+        boundaries: list[float] = [float(word_cells[0][0])]
+        for left, right in zip(cell_groups, cell_groups[1:]):
+            left_end = float(left[-1][1])
+            right_start = float(right[0][0])
+            boundaries.append((left_end + right_start) * 0.5)
+        boundaries.append(float(word_cells[-1][1]))
+
+        syllables: list[tuple[float, float]] = []
+        for si in range(syllable_count):
+            a = boundaries[si]
+            b = boundaries[si + 1]
+            syllables.append((a, max(a + 0.08, b)))
+        out.append((word, syllables))
+
+    return out
+
+
+def _merge_pitch_events(
+    events: list[dict[str, float]],
+    max_events: int,
+    min_event_s: float,
+) -> list[dict[str, float]]:
+    events = [dict(e) for e in events]
+    if not events:
+        return events
+
+    def merge_pair(i: int) -> None:
+        left = events[i]
+        right = events[i + 1]
+        dl = max(0.001, left["end"] - left["start"])
+        dr = max(0.001, right["end"] - right["start"])
+        tone = (left["tone"] * dl + right["tone"] * dr) / (dl + dr)
+        events[i] = {
+            "start": left["start"],
+            "end": right["end"],
+            "tone": tone,
+        }
+        del events[i + 1]
+
+    while len(events) > 1:
+        too_short = [
+            i
+            for i, event in enumerate(events)
+            if event["end"] - event["start"] < min_event_s
+        ]
+        if too_short:
+            i = too_short[0]
+            if i == 0:
+                merge_pair(0)
+            elif i == len(events) - 1:
+                merge_pair(i - 1)
+            else:
+                left_diff = abs(events[i]["tone"] - events[i - 1]["tone"])
+                right_diff = abs(events[i]["tone"] - events[i + 1]["tone"])
+                merge_pair(i - 1 if left_diff <= right_diff else i)
+            continue
+
+        if len(events) <= max_events:
+            break
+
+        candidates = []
+        for i in range(len(events) - 1):
+            pitch_diff = abs(events[i]["tone"] - events[i + 1]["tone"])
+            duration = (
+                events[i]["end"] - events[i]["start"]
+                + events[i + 1]["end"] - events[i + 1]["start"]
+            )
+            candidates.append((pitch_diff, duration, i))
+        _, _, idx = min(candidates)
+        merge_pair(idx)
+
+    return events
+
+
+def _pitch_events_for_syllable(
+    start: float,
+    end: float,
+    source_notes: list[dict[str, Any]],
+    previous_tone: int,
+    max_events: int,
+    min_event_s: float,
+) -> list[dict[str, float]]:
+    overlaps: list[dict[str, float]] = []
+    for note in source_notes:
+        ns = float(note["start"])
+        ne = float(note["end"])
+        a = max(start, ns)
+        b = min(end, ne)
+        if b - a < 0.025:
+            continue
+        overlaps.append({
+            "start": a,
+            "end": b,
+            "tone": float(note.get("midi_float", note["midi"])),
+        })
+
+    if not overlaps:
+        tone = _tone_for_interval(
+            start,
+            end,
+            source_notes,
+            fallback=previous_tone,
+        )
+        return [{
+            "start": start,
+            "end": end,
+            "tone": float(tone),
+        }]
+
+    overlaps.sort(key=lambda e: (e["start"], e["end"]))
+
+    # Merge nearly identical adjacent F0 events before constructing a
+    # continuous syllable envelope.
+    compact: list[dict[str, float]] = []
+    for event in overlaps:
+        if (
+            compact
+            and abs(compact[-1]["tone"] - event["tone"]) <= 0.75
+            and event["start"] - compact[-1]["end"] <= 0.10
+        ):
+            compact[-1]["end"] = max(compact[-1]["end"], event["end"])
+        else:
+            compact.append(dict(event))
+
+    # Convert voiced F0 events into one continuous word-internal melody
+    # envelope. This is deliberate: OpenUtau continuation notes must touch
+    # exactly or they stop belonging to the same lexical word.
+    boundaries = [start]
+    for left, right in zip(compact, compact[1:]):
+        boundaries.append(
+            max(
+                boundaries[-1] + 0.02,
+                min(
+                    end,
+                    (float(left["end"]) + float(right["start"])) * 0.5,
+                ),
+            )
+        )
+    boundaries.append(end)
+
+    continuous: list[dict[str, float]] = []
+    for i, event in enumerate(compact):
+        a = boundaries[i]
+        b = boundaries[i + 1]
+        if b <= a:
+            continue
+        continuous.append({
+            "start": a,
+            "end": b,
+            "tone": event["tone"],
+        })
+
+    continuous = _merge_pitch_events(
+        continuous,
+        max_events=max(1, max_events),
+        min_event_s=max(0.04, min_event_s),
+    )
+
+    # Re-assert exact syllable edges after merging.
+    continuous[0]["start"] = start
+    continuous[-1]["end"] = end
+    return continuous
 
 
 def _build_word_notes(
     line: str,
     timing: LineTiming,
     source_notes: list[dict[str, Any]],
+    cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    syllable_intervals = _word_syllable_intervals(line, timing)
+    cfg = cfg or {}
+    word_map = _target_word_syllable_intervals(line, timing)
     out: list[dict[str, Any]] = []
     previous_tone = 60
-    previous_word: str | None = None
 
-    for word, syllable_index, start, end in syllable_intervals:
-        raw_tone = _tone_for_interval(
-            start,
-            end,
-            source_notes,
-            fallback=previous_tone,
-        )
-        tone = _stabilize_tone(raw_tone, previous_tone)
-        previous_tone = tone
+    max_melisma = int(cfg.get("max_melisma_notes_per_syllable", 3))
+    min_pitch_event_s = float(cfg.get("min_pitch_event_ms", 90)) / 1000.0
 
-        # Whole word is sent to G2P on the first note. Plain '+' is an
-        # OpenUtau continuation note that stays inside the same word group and
-        # counts as the next syllable. Do NOT use '+~' here: +~ is a vowel
-        # melisma extension, not the next lexical syllable.
-        lyric = word if syllable_index == 0 else "+"
+    for word, syllables in word_map:
+        for syllable_index, (start, end) in enumerate(syllables):
+            events = _pitch_events_for_syllable(
+                start,
+                end,
+                source_notes,
+                previous_tone=previous_tone,
+                max_events=max_melisma,
+                min_event_s=min_pitch_event_s,
+            )
 
-        out.append({
-            "start": start,
-            "end": end,
-            "midi": tone,
-            "midi_float": float(tone),
-            "lyric": lyric,
-            "word": word,
-            "syllable_index": syllable_index,
-        })
-        previous_word = word
+            for event_index, event in enumerate(events):
+                raw_tone = int(round(event["tone"]))
+                tone = _stabilize_tone(raw_tone, previous_tone)
+                previous_tone = tone
+
+                if syllable_index == 0 and event_index == 0:
+                    lyric = word
+                elif event_index == 0:
+                    # Next lexical syllable in the same whole-word G2P group.
+                    lyric = "+"
+                else:
+                    # Extra pitch movement inside the current vowel/melisma.
+                    lyric = "+~"
+
+                out.append({
+                    "start": float(event["start"]),
+                    "end": float(event["end"]),
+                    "midi": tone,
+                    "midi_float": float(tone),
+                    "lyric": lyric,
+                    "word": word,
+                    "syllable_index": syllable_index,
+                    "melisma_index": event_index,
+                })
 
     return out
 
@@ -831,7 +1069,7 @@ def build_ustx(
 
         line_debug: list[dict[str, Any]] = []
         for line_index, (line, timing) in enumerate(zip(section.lines, timings)):
-            notes = _build_word_notes(line, timing, source_notes)
+            notes = _build_word_notes(line, timing, source_notes, cfg)
             generated_notes.extend(notes)
             line_debug.append({
                 "line_index": line_index,
@@ -885,7 +1123,7 @@ def build_ustx(
             for i, line in enumerate(final_repeat.lines):
                 template = template_timings[min(i, len(template_timings) - 1)]
                 timing = _shift_timing(template, shift)
-                notes = _build_word_notes(line, timing, shifted_source_notes)
+                notes = _build_word_notes(line, timing, shifted_source_notes, cfg)
                 generated_notes.extend(notes)
                 repeat_debug.append({
                     "line_index": i,
@@ -938,7 +1176,7 @@ def build_ustx(
     ]
 
     if not ustx_notes:
-        raise RuntimeError("v7.4 generated no target syllable notes.")
+        raise RuntimeError("v7.5 generated no target syllable notes.")
 
     end_tick = max(
         note["position"] + note["duration"]
@@ -948,7 +1186,7 @@ def build_ustx(
     project = {
         "name": "Vocal Translate AI - Ukrainian Guide",
         "comment": (
-            "v7.4: whole-word Ukrainian G2P with syllable-note groups, section-aware ASR timing. "
+            "v7.5: whole-word Ukrainian G2P with syllable-note groups, section-aware ASR timing. "
             "Source lyrics file is never modified."
         ),
         "output_dir": "Vocal",
@@ -1005,11 +1243,11 @@ def build_ustx(
     )
 
     alignment = {
-        "mode": "v7.4_whole_word_syllable_groups",
+        "mode": "v7.5_word_syllable_melisma",
         "sections": debug_sections,
         "repeat_plan": repeat_plan,
         "source_f0_note_count": len(source_notes),
-        "generated_target_syllable_notes": len(ustx_notes),
+        "generated_target_singing_notes": len(ustx_notes),
     }
     (out_dir / "alignment.json").write_text(
         json.dumps(alignment, ensure_ascii=False, indent=2),
@@ -1017,7 +1255,7 @@ def build_ustx(
     )
 
     log(
-        "[DiffSinger] v7.4 grouped-word USTX generated: "
+        "[DiffSinger] v7.5 word/syllable/melisma USTX generated: "
         f"{len(ustx_notes)} syllable notes -> {ustx_path}"
     )
     return ustx_path, repeat_plan
