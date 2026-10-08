@@ -147,33 +147,205 @@ def _trim_trailing_outro(
     return words[:cut]
 
 
-def _partition_words_into_sections(
+def _remove_isolated_asr_islands(
     words: list[dict[str, Any]],
-    section_count: int,
-) -> list[list[dict[str, Any]]]:
-    if section_count <= 1:
-        return [words]
-    if len(words) < section_count:
-        raise RuntimeError(
-            f"ASR produced {len(words)} words for {section_count} lyric sections."
+    min_gap_s: float = 2.0,
+    long_gap_s: float = 8.0,
+    max_words: int = 5,
+    max_duration_s: float = 4.0,
+) -> list[dict[str, Any]]:
+    """Drop tiny ASR hallucination islands inside long instrumental breaks."""
+    if len(words) < 3:
+        return words
+
+    # Split into clusters at meaningful pauses.
+    clusters: list[tuple[int, int]] = []
+    start = 0
+    for i in range(1, len(words)):
+        gap = float(words[i]["start"]) - float(words[i - 1]["end"])
+        if gap >= min_gap_s:
+            clusters.append((start, i))
+            start = i
+    clusters.append((start, len(words)))
+
+    drop_ranges: list[tuple[int, int]] = []
+    for ci, (a, b) in enumerate(clusters):
+        count = b - a
+        duration = float(words[b - 1]["end"]) - float(words[a]["start"])
+        prev_gap = (
+            float(words[a]["start"]) - float(words[a - 1]["end"])
+            if a > 0 else 0.0
+        )
+        next_gap = (
+            float(words[b]["start"]) - float(words[b - 1]["end"])
+            if b < len(words) else 0.0
         )
 
-    gaps: list[tuple[float, int]] = []
-    for i in range(1, len(words)):
-        gap = max(0.0, float(words[i]["start"]) - float(words[i - 1]["end"]))
-        gaps.append((gap, i))
+        # Typical failure: Whisper hallucinates 1-5 words from instrumental
+        # bleed in the middle of a long interlude.
+        surrounded = (
+            (prev_gap >= min_gap_s and next_gap >= long_gap_s)
+            or (next_gap >= min_gap_s and prev_gap >= long_gap_s)
+        )
+        if (
+            count <= max_words
+            and duration <= max_duration_s
+            and surrounded
+        ):
+            drop_ranges.append((a, b))
+            log(
+                "[Alignment] Dropping isolated ASR island: "
+                f"{words[a]['start']:.2f}-{words[b - 1]['end']:.2f}s, "
+                f"words={count}, gaps={prev_gap:.2f}/{next_gap:.2f}s."
+            )
 
-    chosen = sorted(
-        i for _, i in sorted(gaps, reverse=True)[: section_count - 1]
-    )
-    bounds = [0] + chosen + [len(words)]
-    regions = [words[bounds[i]:bounds[i + 1]] for i in range(section_count)]
+    if not drop_ranges:
+        return words
 
+    keep: list[dict[str, Any]] = []
+    for i, word in enumerate(words):
+        if any(a <= i < b for a, b in drop_ranges):
+            continue
+        keep.append(word)
+    return keep
+
+
+def _partition_words_into_sections(
+    words: list[dict[str, Any]],
+    sections: list[LyricSection],
+) -> list[list[dict[str, Any]]]:
+    """DP partition using section lyric weight plus real vocal pauses.
+
+    Unlike the old implementation, this cannot create a section with fewer
+    source words than target lines, and it does not blindly choose the N
+    largest gaps.
+    """
+    n_sections = len(sections)
+    if n_sections <= 1:
+        return [words]
+    if not words:
+        raise RuntimeError("No ASR words available for section alignment.")
+
+    min_words = [max(1, len(sec.lines)) for sec in sections]
+    if len(words) < sum(min_words):
+        raise RuntimeError(
+            f"ASR produced {len(words)} words, but at least "
+            f"{sum(min_words)} are required for {n_sections} lyric sections."
+        )
+
+    target_weights = [
+        max(
+            1,
+            sum(
+                target_syllables(word)
+                for line in sec.lines
+                for word in words_for_line(line)
+            ),
+        )
+        for sec in sections
+    ]
+
+    prefix_syll = [0]
+    for word in words:
+        prefix_syll.append(prefix_syll[-1] + int(word["syllables"]))
+
+    total_source = float(prefix_syll[-1])
+    total_target = float(sum(target_weights))
+    expected_syll = [
+        max(1.0, total_source * weight / total_target)
+        for weight in target_weights
+    ]
+
+    # Prefix/suffix minimum word counts make the DP search valid by design.
+    prefix_min = [0]
+    for value in min_words:
+        prefix_min.append(prefix_min[-1] + value)
+    suffix_min = [0] * (n_sections + 1)
+    for i in range(n_sections - 1, -1, -1):
+        suffix_min[i] = suffix_min[i + 1] + min_words[i]
+
+    n_words = len(words)
+    inf = 1e30
+    dp = [[inf] * (n_words + 1) for _ in range(n_sections + 1)]
+    prev = [[-1] * (n_words + 1) for _ in range(n_sections + 1)]
+    dp[0][0] = 0.0
+
+    for si in range(1, n_sections + 1):
+        min_end = prefix_min[si]
+        max_end = n_words - suffix_min[si]
+        exp = expected_syll[si - 1]
+
+        for end in range(min_end, max_end + 1):
+            start_min = prefix_min[si - 1]
+            start_max = end - min_words[si - 1]
+
+            # Bound pathological spans while still allowing generous variance.
+            max_span = max(
+                min_words[si - 1] + 8,
+                int(math.ceil(exp * 2.3 + 8)),
+            )
+            start_min = max(start_min, end - max_span)
+
+            for start in range(start_min, start_max + 1):
+                if dp[si - 1][start] >= inf:
+                    continue
+
+                src_syll = prefix_syll[end] - prefix_syll[start]
+                mismatch = ((src_syll - exp) ** 2) / max(1.0, exp)
+
+                # Strongly prefer boundaries at real pauses, but syllable
+                # balance still matters enough to reject tiny fake sections.
+                if end < n_words:
+                    gap = max(
+                        0.0,
+                        float(words[end]["start"])
+                        - float(words[end - 1]["end"]),
+                    )
+                    boundary_penalty = 4.0 * math.exp(-gap / 0.28)
+                else:
+                    boundary_penalty = 0.0
+
+                duration = (
+                    float(words[end - 1]["end"])
+                    - float(words[start]["start"])
+                )
+                expected_duration = max(4.0, exp * 0.55)
+                duration_penalty = (
+                    max(0.0, duration - expected_duration * 2.3) ** 2
+                    * 0.025
+                )
+
+                cost = (
+                    dp[si - 1][start]
+                    + mismatch
+                    + boundary_penalty
+                    + duration_penalty
+                )
+                if cost < dp[si][end]:
+                    dp[si][end] = cost
+                    prev[si][end] = start
+
+    if prev[n_sections][n_words] < 0:
+        raise RuntimeError(
+            "Could not find a valid section partition from ASR timings."
+        )
+
+    ranges: list[tuple[int, int]] = []
+    end = n_words
+    for si in range(n_sections, 0, -1):
+        start = prev[si][end]
+        ranges.append((start, end))
+        end = start
+    ranges.reverse()
+
+    regions = [words[a:b] for a, b in ranges]
     log(
-        "[Alignment] Section boundaries from source vocal pauses: "
-        + ", ".join(
-            f"{words[i - 1]['end']:.2f}->{words[i]['start']:.2f}s"
-            for i in chosen
+        "[Alignment] DP section windows: "
+        + " | ".join(
+            f"{sections[i].label}:"
+            f"{region[0]['start']:.2f}-{region[-1]['end']:.2f}s/"
+            f"{len(region)}w"
+            for i, region in enumerate(regions)
         )
     )
     return regions
@@ -442,6 +614,57 @@ def _shift_source_notes(
     return out
 
 
+def _split_final_repeat(
+    sections: list[LyricSection],
+    enabled: bool,
+) -> tuple[list[LyricSection], LyricSection | None, int | None]:
+    if not enabled or len(sections) < 2:
+        return sections, None, None
+
+    last = sections[-1]
+    if section_key(last.label) != "chorus":
+        return sections, None, None
+
+    prev_idx = None
+    for idx in range(len(sections) - 2, -1, -1):
+        if section_key(sections[idx].label) == "chorus":
+            prev_idx = idx
+            break
+    if prev_idx is None:
+        return sections, None, None
+
+    previous = sections[prev_idx]
+    template_len = len(previous.lines)
+    if template_len <= 0:
+        return sections, None, None
+
+    # Case A: final repeat already has its own [Chorus] block.
+    if len(last.lines) == template_len:
+        return sections[:-1], last, prev_idx
+
+    # Case B: the second chorus and the extra final chorus were written under
+    # one heading (12 lines for two 6-line choruses in the current song).
+    if len(last.lines) > template_len:
+        prefix = last.lines[:-template_len]
+        tail = last.lines[-template_len:]
+        if prefix:
+            base = sections[:-1] + [
+                LyricSection(label=last.label, lines=prefix)
+            ]
+            repeat = LyricSection(
+                label=f"{last.label} (final repeat)",
+                lines=tail,
+            )
+            template_idx = len(base) - 1
+            log(
+                "[Structure] Split combined final chorus: "
+                f"base_lines={len(prefix)}, repeat_lines={len(tail)}."
+            )
+            return base, repeat, template_idx
+
+    return sections, None, None
+
+
 def _make_ustx_note(
     note: dict[str, Any],
     ticks_per_second: float,
@@ -484,30 +707,28 @@ def build_ustx(
         raise RuntimeError("No melody notes were extracted from the source vocal.")
 
     append_repeat = bool(cfg.get("append_final_repeated_section", True))
-    final_repeat: LyricSection | None = None
-    previous_repeat_index: int | None = None
-
-    if append_repeat and len(sections) >= 2:
-        final_key = section_key(sections[-1].label)
-        if final_key == "chorus":
-            for idx in range(len(sections) - 2, -1, -1):
-                if section_key(sections[idx].label) == final_key:
-                    final_repeat = sections[-1]
-                    previous_repeat_index = idx
-                    break
-
-    base_sections = sections[:-1] if final_repeat is not None else sections
+    base_sections, final_repeat, previous_repeat_index = _split_final_repeat(
+        sections,
+        append_repeat,
+    )
 
     source_words = _trim_trailing_outro(
         _asr_words(asr),
         float(cfg.get("asr_outro_gap_s", 4.0)),
+    )
+    source_words = _remove_isolated_asr_islands(
+        source_words,
+        min_gap_s=float(cfg.get("asr_island_min_gap_s", 2.0)),
+        long_gap_s=float(cfg.get("asr_island_long_gap_s", 8.0)),
+        max_words=int(cfg.get("asr_island_max_words", 5)),
+        max_duration_s=float(cfg.get("asr_island_max_duration_s", 4.0)),
     )
     if not source_words:
         raise RuntimeError("No usable Whisper word timings for v7.3 alignment.")
 
     source_regions = _partition_words_into_sections(
         source_words,
-        len(base_sections),
+        base_sections,
     )
 
     section_timings: list[list[LineTiming]] = []
