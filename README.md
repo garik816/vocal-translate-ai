@@ -1,4 +1,4 @@
-# Vocal Translate AI v7
+# Vocal Translate AI v7.2.0
 
 Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
 
@@ -179,3 +179,22 @@ For publication or commercial use, make sure you have the necessary rights for t
 ## Why Nero was replaced
 
 Early v7 builds used Nero v170. OpenUtau loaded Nero correctly, but the Ukrainian phonemizer produced phonemes that Nero could not map: the whole phrase validated as errors. Amaboshi Cipher v170 is used instead because its multilingual DiffSinger release includes Ukrainian support.
+
+
+## v7.2 alignment change
+
+v7.2 no longer uses every extracted F0 segment as a lyric note.
+
+The timing pipeline is now:
+
+```text
+Whisper word timestamps -> target lyric lines -> Ukrainian syllables
+                                             |
+                                             v
+                                   one clean lyric note per syllable
+
+F0 extraction --------------------------------^
+                     pitch only; never decides where lyrics begin
+```
+
+This prevents instrument leakage in a Demucs vocal stem from creating fake lyric notes during intros/interludes. Instrumental gaps remain instrumental. Pitch extraction is now used only to choose the pitch of each ASR-anchored syllable note.
