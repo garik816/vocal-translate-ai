@@ -94,11 +94,24 @@ static class Program {
 
         var pool = local.Count > 0 ? local : all;
 
-        var hinted = pool.FirstOrDefault(s =>
-            (s.Name ?? string.Empty).Contains(
-                singerHint, StringComparison.OrdinalIgnoreCase)
-            || (s.Id ?? string.Empty).Contains(
-                singerHint, StringComparison.OrdinalIgnoreCase));
+        var hinted = pool
+            .Where(s =>
+                (s.Name ?? string.Empty).Contains(
+                    singerHint, StringComparison.OrdinalIgnoreCase)
+                || (s.Id ?? string.Empty).Contains(
+                    singerHint, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(s => {
+                try {
+                    string location = Path.GetFullPath(s.Location ?? string.Empty);
+                    return location.Contains(
+                        Path.Combine("Nero_v170", "configs"),
+                        StringComparison.OrdinalIgnoreCase);
+                } catch {
+                    return false;
+                }
+            })
+            .ThenByDescending(s => (s.Id ?? string.Empty).Length)
+            .FirstOrDefault();
 
         if (hinted != null) {
             return hinted;
@@ -196,13 +209,18 @@ static class Program {
             return 4;
         }
 
+        // PhonemizerRunner delivers its async result only when the part belongs
+        // to DocManager.Inst.Project. Previously we validated a standalone UProject,
+        // so every phonemizer response was silently discarded.
+        DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
+        project = DocManager.Inst.Project;
+
         var track = project.tracks[0];
         track.Singer = singer;
         track.Phonemizer = new DiffSingerUkrainianPhonemizer();
         track.RendererSettings.renderer = Renderers.DIFFSINGER;
 
         singer.EnsureLoaded();
-        project.ValidateFull();
 
         var voiceParts = project.parts
             .OfType<UVoicePart>()
@@ -212,20 +230,35 @@ static class Program {
             return 5;
         }
 
-        var deadline = DateTime.UtcNow.AddSeconds(120);
-        while (DateTime.UtcNow < deadline) {
-            project.Validate(new ValidateOptions {
-                SkipTiming = true,
-                SkipPhonemizer = false,
-                SkipPhoneme = false,
-            });
+        Console.WriteLine(
+            $"[OpenUtau] Project loaded into DocManager: "
+            + $"{voiceParts.Count} voice part(s), "
+            + $"{voiceParts.Sum(p => p.notes.Count)} note(s).");
 
-            bool ready = voiceParts.All(
-                p => p.PhonemesUpToDate
-                    && p.renderPhrases.Count > 0);
-            if (ready) {
+        // Trigger phonemization exactly once. Re-validating with
+        // SkipPhonemizer=false in a polling loop changes notesTimestamp on every
+        // pass, making valid async responses stale before they can land.
+        project.ValidateFull();
+
+        var deadline = DateTime.UtcNow.AddMinutes(5);
+        var nextStatus = DateTime.UtcNow;
+        while (DateTime.UtcNow < deadline) {
+            bool phonemesReady = voiceParts.All(p => p.PhonemesUpToDate);
+            bool phrasesReady = voiceParts.All(p => p.renderPhrases.Count > 0);
+
+            if (phonemesReady && phrasesReady) {
                 break;
             }
+
+            if (DateTime.UtcNow >= nextStatus) {
+                Console.WriteLine(
+                    $"[OpenUtau] Waiting: phonemes="
+                    + $"{voiceParts.Count(p => p.PhonemesUpToDate)}/{voiceParts.Count}, "
+                    + $"phrases="
+                    + $"{voiceParts.Count(p => p.renderPhrases.Count > 0)}/{voiceParts.Count}");
+                nextStatus = DateTime.UtcNow.AddSeconds(5);
+            }
+
             await Task.Delay(100);
         }
 
@@ -234,6 +267,16 @@ static class Program {
                 "Timed out waiting for Ukrainian phonemization.");
             return 6;
         }
+        if (!voiceParts.All(p => p.renderPhrases.Count > 0)) {
+            Console.Error.WriteLine(
+                "Phonemization completed, but render phrases were not built.");
+            return 8;
+        }
+
+        Console.WriteLine(
+            $"[OpenUtau] Phonemization ready: "
+            + $"{voiceParts.Sum(p => p.phonemes.Count)} phoneme(s), "
+            + $"{voiceParts.Sum(p => p.renderPhrases.Count)} phrase(s).");
 
         Console.WriteLine(
             $"[OpenUtau] Rendering DiffSinger, steps={steps}...");
