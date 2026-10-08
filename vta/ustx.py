@@ -75,6 +75,65 @@ def syllables(word: str) -> int:
     return max(1, n)
 
 
+def ukrainian_syllables(word: str) -> list[str]:
+    """Split a Ukrainian orthographic word into singable syllable chunks.
+
+    This is synthesis-only: the user's source TXT is never changed.
+    DiffSinger needs one lexical syllable per onset note; +~ is reserved
+    strictly for extending that syllable over connected pitch notes.
+    """
+    word = normalize_synthesis_word(word)
+    if "-" in word:
+        out: list[str] = []
+        for part in word.split("-"):
+            if part:
+                out.extend(ukrainian_syllables(part))
+        return out or [word]
+
+    vowel_pos = [i for i, ch in enumerate(word) if ch in UK_VOWELS]
+    if len(vowel_pos) <= 1:
+        return [word]
+
+    out: list[str] = []
+    start = 0
+    for left_v, right_v in zip(vowel_pos, vowel_pos[1:]):
+        # Consonants between two vowels. Prefer an open syllable:
+        # one consonant goes with the following vowel; in a cluster,
+        # keep only the final onset consonant with the next syllable.
+        cluster_start = left_v + 1
+        cluster_end = right_v
+        cluster_len = max(0, cluster_end - cluster_start)
+
+        if cluster_len == 0:
+            boundary = right_v
+        elif cluster_len == 1:
+            boundary = cluster_start
+        else:
+            boundary = cluster_end - 1
+            # Do not begin a syllable with a soft sign/apostrophe.
+            while boundary > cluster_start and word[boundary] in "ь'’":
+                boundary -= 1
+
+        if boundary <= start:
+            boundary = right_v
+        chunk = word[start:boundary]
+        if chunk:
+            out.append(chunk)
+        start = boundary
+
+    tail = word[start:]
+    if tail:
+        out.append(tail)
+    return out or [word]
+
+
+def singing_units_for_line(line: str) -> list[str]:
+    units: list[str] = []
+    for word in words_for_line(line):
+        units.extend(ukrainian_syllables(word))
+    return units
+
+
 def section_key(label: str) -> str:
     s = label.casefold()
     if "chorus" in s or "присп" in s or "прип" in s:
@@ -190,40 +249,57 @@ def align_lines_to_notes(
     return ranges
 
 
-def distribute_words(words: list[str], note_count: int) -> list[str]:
+def distribute_units(
+    units: list[str],
+    notes: list[dict[str, Any]],
+    max_slur_gap_s: float,
+) -> list[str]:
+    note_count = len(notes)
     if note_count <= 0:
         return []
-    if not words:
-        return ["a"] + ["+~"] * (note_count - 1)
+    if not units:
+        return ["a"] * note_count
 
-    if note_count < len(words):
-        # Rare case: retain every word by grouping adjacent words on one note.
+    # In the unusual case where there are fewer pitch notes than syllables,
+    # keep all text by joining adjacent syllables on the available notes.
+    # This is preferable to silently dropping target text.
+    if note_count < len(units):
         groups = [[] for _ in range(note_count)]
-        for i, word in enumerate(words):
-            idx = min(note_count - 1, int(i * note_count / len(words)))
-            groups[idx].append(word)
-        return [" ".join(g) if g else "+~" for g in groups]
+        for i, unit in enumerate(units):
+            idx = min(note_count - 1, int(i * note_count / len(units)))
+            groups[idx].append(unit)
+        return ["".join(g) if g else "a" for g in groups]
 
-    weights = [syllables(w) for w in words]
-    total = sum(weights)
-    raw = [note_count * w / total for w in weights]
-    counts = [max(1, int(math.floor(x))) for x in raw]
-
-    while sum(counts) > note_count:
-        candidates = [i for i, c in enumerate(counts) if c > 1]
-        if not candidates:
-            break
-        i = min(candidates, key=lambda j: raw[j] - math.floor(raw[j]))
-        counts[i] -= 1
-
-    while sum(counts) < note_count:
-        i = max(range(len(words)), key=lambda j: raw[j] - counts[j])
-        counts[i] += 1
+    # Give every syllable at least one onset note. Extra pitch notes are
+    # distributed across syllables; they become +~ only when physically
+    # connected to the preceding note.
+    counts = [1] * len(units)
+    extra = note_count - len(units)
+    for i in range(extra):
+        counts[i % len(counts)] += 1
 
     lyrics: list[str] = []
-    for word, count in zip(words, counts):
-        lyrics.append(word)
-        lyrics.extend(["+~"] * (count - 1))
+    note_index = 0
+    for unit, count in zip(units, counts):
+        lyrics.append(unit)
+        note_index += 1
+        for _ in range(count - 1):
+            if note_index >= note_count:
+                break
+            prev = notes[note_index - 1]
+            cur = notes[note_index]
+            gap = max(0.0, float(cur["start"]) - float(prev["end"]))
+            if gap <= max_slur_gap_s:
+                lyrics.append("+~")
+            else:
+                # A slur marker after a real pause is invalid in OpenUtau.
+                # Re-articulate the same syllable instead of generating an
+                # isolated '+~' phoneme.
+                lyrics.append(unit)
+            note_index += 1
+
+    while len(lyrics) < note_count:
+        lyrics.append(units[-1])
     return lyrics[:note_count]
 
 
@@ -231,12 +307,18 @@ def assign_lyrics(
     lines: list[str],
     notes: list[dict[str, Any]],
     ranges: list[tuple[int, int]],
+    max_slur_gap_s: float,
 ) -> list[str]:
-    result = ["+~"] * len(notes)
+    result = ["a"] * len(notes)
     for line, (start, end) in zip(lines, ranges):
         if end <= start:
             continue
-        assigned = distribute_words(words_for_line(line), end - start)
+        units = singing_units_for_line(line)
+        assigned = distribute_units(
+            units,
+            notes[start:end],
+            max_slur_gap_s=max_slur_gap_s,
+        )
         for offset, lyric in enumerate(assigned):
             result[start + offset] = lyric
     return result
@@ -307,7 +389,10 @@ def build_ustx(
     base_sections = sections[:-1] if final_repeat is not None else sections
     base_lines = [line for sec in base_sections for line in sec.lines]
     ranges = align_lines_to_notes(base_lines, source_notes, asr)
-    lyrics_by_note = assign_lyrics(base_lines, source_notes, ranges)
+    slur_gap_s = float(cfg.get("slur_max_gap_ms", 120)) / 1000.0
+    lyrics_by_note = assign_lyrics(
+        base_lines, source_notes, ranges, max_slur_gap_s=slur_gap_s
+    )
 
     repeat_plan: dict[str, Any] | None = None
     all_notes = [dict(n) for n in source_notes]
@@ -338,7 +423,12 @@ def build_ustx(
                     duplicated.append(d)
 
                 final_ranges = align_lines_to_notes(final_repeat.lines, duplicated, None)
-                final_lyrics = assign_lyrics(final_repeat.lines, duplicated, final_ranges)
+                final_lyrics = assign_lyrics(
+                    final_repeat.lines,
+                    duplicated,
+                    final_ranges,
+                    max_slur_gap_s=slur_gap_s,
+                )
                 all_notes.extend(duplicated)
                 all_lyrics.extend(final_lyrics)
 
@@ -426,6 +516,10 @@ def build_ustx(
         "base_line_ranges": ranges,
         "repeat_plan": repeat_plan,
         "note_count": len(all_notes),
+        "singing_unit_count": sum(
+            len(singing_units_for_line(line))
+            for sec in sections for line in sec.lines
+        ),
     }
     (out_dir / "alignment.json").write_text(
         json.dumps(alignment, ensure_ascii=False, indent=2),
