@@ -130,7 +130,7 @@ function Download-File([string]$Url, [string]$Destination) {
 }
 
 try {
-    Write-Host '=== Vocal Translate AI v7.3.0: setup / verify ==='
+    Write-Host '=== Vocal Translate AI v7.3.1.1: setup / verify ==='
     Refresh-Path
 
     $env:UV_HTTP_TIMEOUT = '180'
