@@ -23,7 +23,7 @@
   "diffsinger_steps": 30,
   "low_vram_diffsinger_steps": 20,
   "ustx_bpm": 120,
-  "slur_max_gap_ms": 120,
+  "slur_max_gap_ms": 0,
   "append_final_repeated_section": true,
   "repeat_section_gap_s": 0.45,
   "reference_seconds": 8,
@@ -37,5 +37,6 @@
   "mix_instrumental_gain_db": 0,
   "output_bitrate": "320k",
   "write_guide_preview": true,
-  "quality_profile": "v7_diffsinger_uk"
+  "quality_profile": "v7.2_asr_syllable_alignment",
+  "alignment_mode": "asr_word_timing"
 }
