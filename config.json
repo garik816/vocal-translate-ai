@@ -37,12 +37,14 @@
   "mix_instrumental_gain_db": 0,
   "output_bitrate": "320k",
   "write_guide_preview": true,
-  "quality_profile": "v7.4_grouped_syllables",
-  "alignment_mode": "section_dp_whole_word_grouped_syllables",
+  "quality_profile": "v7.5_word_syllable_melisma",
+  "alignment_mode": "section_dp_word_syllable_melisma",
   "asr_outro_gap_s": 4,
   "asr_island_min_gap_s": 2,
   "asr_island_long_gap_s": 8,
   "asr_island_max_words": 5,
   "asr_island_max_duration_s": 4,
-  "pitch_octave_stabilization": true
+  "pitch_octave_stabilization": true,
+  "max_melisma_notes_per_syllable": 3,
+  "min_pitch_event_ms": 90
 }
