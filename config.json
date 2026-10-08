@@ -19,7 +19,7 @@
   "melody_fmax": 440,
   "melody_min_note_ms": 70,
   "melody_max_gap_ms": 90,
-  "diffsinger_singer": "Nero",
+  "diffsinger_singer": "Amaboshi Cipher",
   "diffsinger_steps": 30,
   "low_vram_diffsinger_steps": 20,
   "ustx_bpm": 120,
