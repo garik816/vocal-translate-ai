@@ -79,62 +79,12 @@ def words_for_line(line: str) -> list[str]:
     return [normalize_synthesis_word(w) for w in WORD_RE.findall(line)]
 
 
-def ukrainian_syllables(word: str) -> list[str]:
-    word = normalize_synthesis_word(word)
-    if "-" in word:
-        out: list[str] = []
-        for part in word.split("-"):
-            if part:
-                out.extend(ukrainian_syllables(part))
-        return out or [word]
-
-    vowel_pos = [i for i, ch in enumerate(word) if ch in UK_VOWELS]
-    if len(vowel_pos) <= 1:
-        return [word]
-
-    out: list[str] = []
-    start = 0
-    for left_v, right_v in zip(vowel_pos, vowel_pos[1:]):
-        cluster_start = left_v + 1
-        cluster_end = right_v
-        cluster_len = max(0, cluster_end - cluster_start)
-
-        if cluster_len == 0:
-            boundary = right_v
-        elif cluster_len == 1:
-            boundary = cluster_start
-        else:
-            boundary = cluster_end - 1
-            while boundary > cluster_start and word[boundary] in "ь'’":
-                boundary -= 1
-
-        if boundary <= start:
-            boundary = right_v
-        chunk = word[start:boundary]
-        if chunk:
-            out.append(chunk)
-        start = boundary
-
-    tail = word[start:]
-    if tail:
-        out.append(tail)
-    return out or [word]
+def target_syllables(word: str) -> int:
+    return max(1, sum(1 for ch in word if ch in UK_VOWELS))
 
 
-def singing_units_for_line(line: str) -> list[str]:
-    units: list[str] = []
-    for word in words_for_line(line):
-        units.extend(ukrainian_syllables(word))
-    return units
-
-
-def count_target_syllables(line: str) -> int:
-    return max(1, len(singing_units_for_line(line)))
-
-
-def count_source_syllables(text: str) -> int:
-    chars = [c for c in text if c in SRC_VOWELS]
-    return max(1, len(chars))
+def source_syllables(word: str) -> int:
+    return max(1, sum(1 for ch in word if ch in SRC_VOWELS))
 
 
 def section_key(label: str) -> str:
@@ -151,7 +101,7 @@ def section_key(label: str) -> str:
 def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not asr:
         return []
-    words: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for item in asr.get("words", []) or []:
         try:
             start = float(item["start"])
@@ -161,18 +111,18 @@ def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
         text = str(item.get("word", "")).strip()
         if not text or end <= start:
             continue
-        words.append({
+        out.append({
             "start": start,
             "end": end,
             "word": text,
             "probability": float(item.get("probability", 0.0) or 0.0),
-            "syllables": count_source_syllables(text),
+            "syllables": source_syllables(text),
         })
-    words.sort(key=lambda w: (w["start"], w["end"]))
-    return words
+    out.sort(key=lambda w: (w["start"], w["end"]))
+    return out
 
 
-def _trim_trailing_outro_words(
+def _trim_trailing_outro(
     words: list[dict[str, Any]],
     gap_s: float,
 ) -> list[dict[str, Any]]:
@@ -186,52 +136,77 @@ def _trim_trailing_outro_words(
         if gap >= gap_s and tail_ratio <= 0.25:
             cut = i
 
-    if cut is not None:
-        log(
-            "[Alignment] Ignoring trailing ASR outro after "
-            f"{words[cut - 1]['end']:.2f}s; "
-            f"gap={words[cut]['start'] - words[cut - 1]['end']:.2f}s, "
-            f"tail_words={len(words) - cut}."
+    if cut is None:
+        return words
+
+    log(
+        "[Alignment] Trailing source outro excluded from base lyrics: "
+        f"gap={words[cut]['start'] - words[cut - 1]['end']:.2f}s, "
+        f"tail_words={len(words) - cut}."
+    )
+    return words[:cut]
+
+
+def _partition_words_into_sections(
+    words: list[dict[str, Any]],
+    section_count: int,
+) -> list[list[dict[str, Any]]]:
+    if section_count <= 1:
+        return [words]
+    if len(words) < section_count:
+        raise RuntimeError(
+            f"ASR produced {len(words)} words for {section_count} lyric sections."
         )
-        return words[:cut]
-    return words
+
+    gaps: list[tuple[float, int]] = []
+    for i in range(1, len(words)):
+        gap = max(0.0, float(words[i]["start"]) - float(words[i - 1]["end"]))
+        gaps.append((gap, i))
+
+    chosen = sorted(
+        i for _, i in sorted(gaps, reverse=True)[: section_count - 1]
+    )
+    bounds = [0] + chosen + [len(words)]
+    regions = [words[bounds[i]:bounds[i + 1]] for i in range(section_count)]
+
+    log(
+        "[Alignment] Section boundaries from source vocal pauses: "
+        + ", ".join(
+            f"{words[i - 1]['end']:.2f}->{words[i]['start']:.2f}s"
+            for i in chosen
+        )
+    )
+    return regions
 
 
-def align_lines_to_asr_words(
+def _align_lines_within_section(
     lines: list[str],
-    asr: dict[str, Any] | None,
-    outro_gap_s: float = 4.0,
+    words: list[dict[str, Any]],
 ) -> list[LineTiming]:
-    words = _trim_trailing_outro_words(_asr_words(asr), outro_gap_s)
     if not lines:
         return []
-    if not words:
+    if len(words) < len(lines):
         raise RuntimeError(
-            "Whisper returned no word timestamps. v7.2 requires ASR timing "
-            "to keep lyrics out of instrumental sections."
+            f"Section has only {len(words)} ASR words for {len(lines)} target lines."
         )
+
+    target_weights = [
+        max(1, sum(target_syllables(w) for w in words_for_line(line)))
+        for line in lines
+    ]
+    prefix = [0]
+    for w in words:
+        prefix.append(prefix[-1] + int(w["syllables"]))
+
+    total_source = float(prefix[-1])
+    total_target = float(sum(target_weights))
+    expected = [
+        max(1.0, total_source * weight / total_target)
+        for weight in target_weights
+    ]
 
     n_lines = len(lines)
     n_words = len(words)
-    if n_words < n_lines:
-        raise RuntimeError(
-            f"Not enough ASR words for lyric alignment: {n_words} words "
-            f"for {n_lines} target lines."
-        )
-
-    line_weights = [count_target_syllables(line) for line in lines]
-    total_target = float(sum(line_weights))
-
-    prefix_syll = [0]
-    for w in words:
-        prefix_syll.append(prefix_syll[-1] + int(w["syllables"]))
-    total_source = float(prefix_syll[-1])
-
-    expected = [
-        max(1.0, total_source * weight / total_target)
-        for weight in line_weights
-    ]
-
     inf = 1e30
     dp = [[inf] * (n_words + 1) for _ in range(n_lines + 1)]
     prev = [[-1] * (n_words + 1) for _ in range(n_lines + 1)]
@@ -239,33 +214,30 @@ def align_lines_to_asr_words(
 
     for li in range(1, n_lines + 1):
         exp = expected[li - 1]
-        min_end = li
-        max_end = n_words - (n_lines - li)
-        for end in range(min_end, max_end + 1):
-            start_min = li - 1
-            start_max = end - 1
-            # Keep the search local enough to prevent one line from swallowing
-            # an entire verse when Whisper hallucinates extra words.
-            max_word_span = max(3, int(math.ceil(exp * 2.5 + 5)))
-            start_min = max(start_min, end - max_word_span)
+        for end in range(li, n_words - (n_lines - li) + 1):
+            start_lo = li - 1
+            start_hi = end - 1
+            max_span = max(4, int(math.ceil(exp * 2.2 + 4)))
+            start_lo = max(start_lo, end - max_span)
 
-            for start in range(start_min, start_max + 1):
+            for start in range(start_lo, start_hi + 1):
                 if dp[li - 1][start] >= inf:
                     continue
 
-                src_syll = prefix_syll[end] - prefix_syll[start]
+                src_syll = prefix[end] - prefix[start]
                 mismatch = ((src_syll - exp) ** 2) / max(1.0, exp)
 
-                # Prefer a line boundary at a real vocal pause.
                 if end < n_words:
-                    gap = max(0.0, words[end]["start"] - words[end - 1]["end"])
-                    boundary_penalty = 3.0 * math.exp(-gap / 0.20)
+                    gap = max(
+                        0.0,
+                        float(words[end]["start"]) - float(words[end - 1]["end"]),
+                    )
+                    boundary_penalty = 2.5 * math.exp(-gap / 0.18)
                 else:
                     boundary_penalty = 0.0
 
-                # Avoid absurdly long lyric lines caused by ASR hallucinations.
-                dur = words[end - 1]["end"] - words[start]["start"]
-                duration_penalty = max(0.0, dur - 12.0) ** 2 * 0.15
+                duration = float(words[end - 1]["end"]) - float(words[start]["start"])
+                duration_penalty = max(0.0, duration - 11.0) ** 2 * 0.20
 
                 cost = (
                     dp[li - 1][start]
@@ -278,7 +250,7 @@ def align_lines_to_asr_words(
                     prev[li][end] = start
 
     if prev[n_lines][n_words] < 0:
-        raise RuntimeError("Could not align target lyric lines to ASR word timings.")
+        raise RuntimeError("Could not align lyric lines inside a source section.")
 
     ranges: list[tuple[int, int]] = []
     end = n_words
@@ -288,70 +260,84 @@ def align_lines_to_asr_words(
         end = start
     ranges.reverse()
 
-    result: list[LineTiming] = []
+    out: list[LineTiming] = []
     for start, end in ranges:
         chunk = words[start:end]
-        result.append(LineTiming(
+        out.append(LineTiming(
             start=float(chunk[0]["start"]),
             end=float(chunk[-1]["end"]),
             words=chunk,
             word_start=start,
             word_end=end,
         ))
-    return result
+    return out
 
 
-def _source_syllable_cells(words: list[dict[str, Any]]) -> list[tuple[float, float]]:
+def _source_syllable_cells(
+    words: list[dict[str, Any]],
+) -> list[tuple[float, float]]:
     cells: list[tuple[float, float]] = []
     for word in words:
         start = float(word["start"])
         end = float(word["end"])
         count = max(1, int(word.get("syllables", 1)))
-        span = max(0.04, end - start)
+        span = max(0.06, end - start)
         for i in range(count):
             a = start + span * (i / count)
             b = start + span * ((i + 1) / count)
-            if b <= a:
-                b = a + 0.04
-            cells.append((a, b))
+            cells.append((a, max(a + 0.04, b)))
     return cells
 
 
-def _map_units_to_cells(
-    units: list[str],
+def _time_at_cell_fraction(
     cells: list[tuple[float, float]],
-) -> list[tuple[str, float, float]]:
-    if not units:
-        return []
+    fraction: float,
+) -> float:
     if not cells:
-        raise RuntimeError("No source timing cells available for target syllables.")
+        raise RuntimeError("No source timing cells.")
+    fraction = max(0.0, min(1.0, fraction))
+    if fraction <= 0:
+        return float(cells[0][0])
+    if fraction >= 1:
+        return float(cells[-1][1])
 
-    assignments: dict[int, list[int]] = {}
-    n_src = len(cells)
-    n_tgt = len(units)
+    pos = fraction * len(cells)
+    idx = min(len(cells) - 1, int(math.floor(pos)))
+    local = pos - idx
+    a, b = cells[idx]
+    return float(a + (b - a) * local)
 
-    for ti in range(n_tgt):
-        # Midpoint resampling. Multiple target syllables may intentionally map
-        # to the same source cell; that cell is subdivided below.
-        src_idx = min(
-            n_src - 1,
-            int(((ti + 0.5) * n_src) / n_tgt),
-        )
-        assignments.setdefault(src_idx, []).append(ti)
 
-    result: list[tuple[str, float, float] | None] = [None] * n_tgt
-    for src_idx, target_indices in assignments.items():
-        a, b = cells[src_idx]
-        span = max(0.05, b - a)
-        count = len(target_indices)
-        for j, ti in enumerate(target_indices):
-            start = a + span * (j / count)
-            end = a + span * ((j + 1) / count)
-            if end - start < 0.045:
-                end = start + 0.045
-            result[ti] = (units[ti], start, end)
+def _target_word_intervals(
+    line: str,
+    timing: LineTiming,
+) -> list[tuple[str, float, float]]:
+    target_words = words_for_line(line)
+    if not target_words:
+        return []
 
-    return [x for x in result if x is not None]
+    cells = _source_syllable_cells(timing.words)
+    weights = [target_syllables(word) for word in target_words]
+    total = float(sum(weights))
+
+    out: list[tuple[str, float, float]] = []
+    acc = 0.0
+    for word, weight in zip(target_words, weights):
+        start = _time_at_cell_fraction(cells, acc / total)
+        acc += weight
+        end = _time_at_cell_fraction(cells, acc / total)
+
+        if end - start < 0.10:
+            end = start + 0.10
+
+        out.append((word, start, end))
+
+    # Preserve source line edges exactly.
+    first_word, _, first_end = out[0]
+    out[0] = (first_word, timing.start, first_end)
+    last_word, last_start, _ = out[-1]
+    out[-1] = (last_word, last_start, timing.end)
+    return out
 
 
 def _tone_for_interval(
@@ -360,7 +346,7 @@ def _tone_for_interval(
     source_notes: list[dict[str, Any]],
     fallback: int = 60,
 ) -> int:
-    weighted: list[tuple[float, float]] = []
+    overlaps: list[tuple[float, float]] = []
     center = (start + end) * 0.5
 
     for note in source_notes:
@@ -368,16 +354,16 @@ def _tone_for_interval(
         ne = float(note["end"])
         overlap = max(0.0, min(end, ne) - max(start, ns))
         if overlap > 0:
-            weighted.append((float(note.get("midi_float", note["midi"])), overlap))
+            overlaps.append((
+                float(note.get("midi_float", note["midi"])),
+                overlap,
+            ))
 
-    if weighted:
-        expanded = []
-        for midi, weight in weighted:
-            expanded.append((midi, weight))
-        expanded.sort(key=lambda x: x[0])
-        total = sum(w for _, w in expanded)
+    if overlaps:
+        overlaps.sort(key=lambda x: x[0])
+        total = sum(weight for _, weight in overlaps)
         acc = 0.0
-        for midi, weight in expanded:
+        for midi, weight in overlaps:
             acc += weight
             if acc >= total * 0.5:
                 return int(max(24, min(96, round(midi))))
@@ -389,23 +375,24 @@ def _tone_for_interval(
                 ((float(n["start"]) + float(n["end"])) * 0.5) - center
             ),
         )
-        return int(max(24, min(96, round(float(nearest.get("midi_float", nearest["midi"]))))))
+        return int(max(
+            24,
+            min(96, round(float(nearest.get("midi_float", nearest["midi"])))),
+        ))
 
     return fallback
 
 
-def _build_line_notes(
+def _build_word_notes(
     line: str,
     timing: LineTiming,
     source_notes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    units = singing_units_for_line(line)
-    cells = _source_syllable_cells(timing.words)
-    mapped = _map_units_to_cells(units, cells)
-
+    intervals = _target_word_intervals(line, timing)
     out: list[dict[str, Any]] = []
     previous_tone = 60
-    for lyric, start, end in mapped:
+
+    for lyric, start, end in intervals:
         tone = _tone_for_interval(start, end, source_notes, fallback=previous_tone)
         previous_tone = tone
         out.append({
@@ -413,22 +400,24 @@ def _build_line_notes(
             "end": end,
             "midi": tone,
             "midi_float": float(tone),
+            # Critical v7.3 change: whole Ukrainian word goes to G2P.
             "lyric": lyric,
         })
     return out
 
 
 def _shift_timing(timing: LineTiming, shift: float) -> LineTiming:
-    words = []
-    for w in timing.words:
-        x = dict(w)
-        x["start"] = float(w["start"]) + shift
-        x["end"] = float(w["end"]) + shift
-        words.append(x)
+    shifted_words: list[dict[str, Any]] = []
+    for word in timing.words:
+        item = dict(word)
+        item["start"] = float(word["start"]) + shift
+        item["end"] = float(word["end"]) + shift
+        shifted_words.append(item)
+
     return LineTiming(
         start=timing.start + shift,
         end=timing.end + shift,
-        words=words,
+        words=shifted_words,
         word_start=timing.word_start,
         word_end=timing.word_end,
     )
@@ -441,15 +430,15 @@ def _shift_source_notes(
     shift: float,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for n in source_notes:
-        ns = float(n["start"])
-        ne = float(n["end"])
+    for note in source_notes:
+        ns = float(note["start"])
+        ne = float(note["end"])
         if ne <= start or ns >= end:
             continue
-        x = dict(n)
-        x["start"] = ns + shift
-        x["end"] = ne + shift
-        out.append(x)
+        item = dict(note)
+        item["start"] = ns + shift
+        item["end"] = ne + shift
+        out.append(item)
     return out
 
 
@@ -459,7 +448,7 @@ def _make_ustx_note(
 ) -> dict[str, Any]:
     start = int(round(float(note["start"]) * ticks_per_second))
     end = int(round(float(note["end"]) * ticks_per_second))
-    duration = max(20, end - start)
+    duration = max(40, end - start)
     return {
         "position": start,
         "duration": duration,
@@ -499,53 +488,79 @@ def build_ustx(
     previous_repeat_index: int | None = None
 
     if append_repeat and len(sections) >= 2:
-        key = section_key(sections[-1].label)
-        if key == "chorus":
+        final_key = section_key(sections[-1].label)
+        if final_key == "chorus":
             for idx in range(len(sections) - 2, -1, -1):
-                if section_key(sections[idx].label) == key:
+                if section_key(sections[idx].label) == final_key:
                     final_repeat = sections[-1]
                     previous_repeat_index = idx
                     break
 
     base_sections = sections[:-1] if final_repeat is not None else sections
-    base_lines = [line for sec in base_sections for line in sec.lines]
 
-    timings = align_lines_to_asr_words(
-        base_lines,
-        asr,
-        outro_gap_s=float(cfg.get("asr_outro_gap_s", 4.0)),
+    source_words = _trim_trailing_outro(
+        _asr_words(asr),
+        float(cfg.get("asr_outro_gap_s", 4.0)),
     )
-    if len(timings) != len(base_lines):
-        raise RuntimeError("Internal error: ASR line timing count mismatch.")
+    if not source_words:
+        raise RuntimeError("No usable Whisper word timings for v7.3 alignment.")
 
+    source_regions = _partition_words_into_sections(
+        source_words,
+        len(base_sections),
+    )
+
+    section_timings: list[list[LineTiming]] = []
     generated_notes: list[dict[str, Any]] = []
-    line_debug: list[dict[str, Any]] = []
-    for index, (line, timing) in enumerate(zip(base_lines, timings)):
-        notes = _build_line_notes(line, timing, source_notes)
-        generated_notes.extend(notes)
-        line_debug.append({
-            "line_index": index,
-            "text": line,
-            "start": timing.start,
-            "end": timing.end,
-            "source_word_start": timing.word_start,
-            "source_word_end": timing.word_end,
-            "target_syllables": len(singing_units_for_line(line)),
-            "generated_notes": len(notes),
+    debug_sections: list[dict[str, Any]] = []
+
+    for section_index, (section, region) in enumerate(
+        zip(base_sections, source_regions)
+    ):
+        timings = _align_lines_within_section(section.lines, region)
+        section_timings.append(timings)
+
+        line_debug: list[dict[str, Any]] = []
+        for line_index, (line, timing) in enumerate(zip(section.lines, timings)):
+            notes = _build_word_notes(line, timing, source_notes)
+            generated_notes.extend(notes)
+            line_debug.append({
+                "line_index": line_index,
+                "text": line,
+                "start": timing.start,
+                "end": timing.end,
+                "source_words": [
+                    str(w.get("word", "")) for w in timing.words
+                ],
+                "target_words": words_for_line(line),
+                "generated_word_notes": len(notes),
+            })
+
+        debug_sections.append({
+            "section_index": section_index,
+            "label": section.label,
+            "source_start": float(region[0]["start"]),
+            "source_end": float(region[-1]["end"]),
+            "source_word_count": len(region),
+            "lines": line_debug,
         })
 
     repeat_plan: dict[str, Any] | None = None
 
-    if final_repeat is not None and previous_repeat_index is not None:
-        line_start = sum(len(s.lines) for s in base_sections[:previous_repeat_index])
-        line_end = line_start + len(base_sections[previous_repeat_index].lines)
-
-        if line_start < len(timings) and line_end <= len(timings):
-            template_timings = timings[line_start:line_end]
+    if (
+        final_repeat is not None
+        and previous_repeat_index is not None
+        and previous_repeat_index < len(section_timings)
+    ):
+        template_timings = section_timings[previous_repeat_index]
+        if template_timings:
             template_start = template_timings[0].start
             template_end = template_timings[-1].end
 
-            song_duration = float(melody.get("duration", source_notes[-1]["end"]))
+            song_duration = float(melody.get(
+                "duration",
+                source_notes[-1]["end"],
+            ))
             gap_s = float(cfg.get("repeat_section_gap_s", 0.45))
             dest_start = song_duration + gap_s
             shift = dest_start - template_start
@@ -557,27 +572,19 @@ def build_ustx(
                 shift,
             )
 
+            repeat_debug: list[dict[str, Any]] = []
             for i, line in enumerate(final_repeat.lines):
-                template_timing = template_timings[
-                    min(i, len(template_timings) - 1)
-                ]
-                shifted_timing = _shift_timing(template_timing, shift)
-                notes = _build_line_notes(
-                    line,
-                    shifted_timing,
-                    shifted_source_notes,
-                )
+                template = template_timings[min(i, len(template_timings) - 1)]
+                timing = _shift_timing(template, shift)
+                notes = _build_word_notes(line, timing, shifted_source_notes)
                 generated_notes.extend(notes)
-                line_debug.append({
-                    "line_index": len(base_lines) + i,
+                repeat_debug.append({
+                    "line_index": i,
                     "text": line,
-                    "start": shifted_timing.start,
-                    "end": shifted_timing.end,
-                    "source_word_start": template_timing.word_start,
-                    "source_word_end": template_timing.word_end,
-                    "target_syllables": len(singing_units_for_line(line)),
-                    "generated_notes": len(notes),
-                    "repeated": True,
+                    "start": timing.start,
+                    "end": timing.end,
+                    "target_words": words_for_line(line),
+                    "generated_word_notes": len(notes),
                 })
 
             repeat_plan = {
@@ -588,38 +595,51 @@ def build_ustx(
                 "dest_start": dest_start,
                 "dest_end": dest_start + (template_end - template_start),
             }
+            debug_sections.append({
+                "section_index": len(base_sections),
+                "label": final_repeat.label,
+                "repeated": True,
+                "source_start": template_start,
+                "source_end": template_end,
+                "dest_start": dest_start,
+                "dest_end": repeat_plan["dest_end"],
+                "lines": repeat_debug,
+            })
             log(
-                "[Structure] Appending final repeated chorus using ASR-anchored "
-                f"timing ({template_start:.2f}-{template_end:.2f}s -> "
-                f"{dest_start:.2f}s)."
+                "[Structure] Final chorus repeats exactly the previous chorus "
+                f"window: {template_start:.2f}-{template_end:.2f}s "
+                f"({template_end - template_start:.2f}s)."
             )
 
     generated_notes.sort(key=lambda n: (n["start"], n["end"]))
 
-    # Safety: do not allow overlapping lyric notes. Shorten the earlier one;
-    # never move the next lyric into an instrumental pause.
+    # Prevent overlap without moving later words into silent sections.
     for i in range(len(generated_notes) - 1):
         cur = generated_notes[i]
         nxt = generated_notes[i + 1]
         if float(cur["end"]) > float(nxt["start"]):
-            cur["end"] = max(float(cur["start"]) + 0.04, float(nxt["start"]))
+            cur["end"] = max(float(cur["start"]) + 0.08, float(nxt["start"]))
 
     bpm = float(cfg.get("ustx_bpm", 120.0))
     ticks_per_second = 480.0 * bpm / 60.0
     ustx_notes = [
         _make_ustx_note(note, ticks_per_second)
         for note in generated_notes
-        if float(note["end"]) > float(note["start"])
+        if float(note["end"]) - float(note["start"]) >= 0.075
     ]
 
     if not ustx_notes:
-        raise RuntimeError("No syllable notes were generated for DiffSinger.")
+        raise RuntimeError("v7.3 generated no target-word notes.")
 
-    end_tick = max(n["position"] + n["duration"] for n in ustx_notes) + 960
+    end_tick = max(
+        note["position"] + note["duration"]
+        for note in ustx_notes
+    ) + 960
+
     project = {
         "name": "Vocal Translate AI - Ukrainian Guide",
         "comment": (
-            "v7.2 ASR-anchored syllable timing. "
+            "v7.3: whole-word Ukrainian G2P, section-aware ASR timing. "
             "Source lyrics file is never modified."
         ),
         "output_dir": "Vocal",
@@ -663,6 +683,7 @@ def build_ustx(
 
     out_dir = track_work / "diffsinger"
     out_dir.mkdir(parents=True, exist_ok=True)
+
     ustx_path = out_dir / "guide.ustx"
     ustx_path.write_text(
         yaml.safe_dump(
@@ -675,15 +696,11 @@ def build_ustx(
     )
 
     alignment = {
-        "mode": "asr_word_timing_to_ukrainian_syllables",
-        "sections": [
-            {"label": s.label, "lines": s.lines}
-            for s in sections
-        ],
-        "lines": line_debug,
+        "mode": "v7.3_section_aware_whole_word",
+        "sections": debug_sections,
         "repeat_plan": repeat_plan,
         "source_f0_note_count": len(source_notes),
-        "generated_syllable_note_count": len(ustx_notes),
+        "generated_target_word_notes": len(ustx_notes),
     }
     (out_dir / "alignment.json").write_text(
         json.dumps(alignment, ensure_ascii=False, indent=2),
@@ -691,7 +708,7 @@ def build_ustx(
     )
 
     log(
-        "[DiffSinger] v7.2 ASR-anchored USTX generated: "
-        f"{len(ustx_notes)} syllable notes -> {ustx_path}"
+        "[DiffSinger] v7.3 whole-word USTX generated: "
+        f"{len(ustx_notes)} word notes -> {ustx_path}"
     )
     return ustx_path, repeat_plan
