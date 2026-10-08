@@ -194,7 +194,7 @@ def distribute_words(words: list[str], note_count: int) -> list[str]:
     if note_count <= 0:
         return []
     if not words:
-        return ["a"] + ["+"] * (note_count - 1)
+        return ["a"] + ["+~"] * (note_count - 1)
 
     if note_count < len(words):
         # Rare case: retain every word by grouping adjacent words on one note.
@@ -202,7 +202,7 @@ def distribute_words(words: list[str], note_count: int) -> list[str]:
         for i, word in enumerate(words):
             idx = min(note_count - 1, int(i * note_count / len(words)))
             groups[idx].append(word)
-        return [" ".join(g) if g else "+" for g in groups]
+        return [" ".join(g) if g else "+~" for g in groups]
 
     weights = [syllables(w) for w in words]
     total = sum(weights)
@@ -223,7 +223,7 @@ def distribute_words(words: list[str], note_count: int) -> list[str]:
     lyrics: list[str] = []
     for word, count in zip(words, counts):
         lyrics.append(word)
-        lyrics.extend(["+"] * (count - 1))
+        lyrics.extend(["+~"] * (count - 1))
     return lyrics[:note_count]
 
 
@@ -232,7 +232,7 @@ def assign_lyrics(
     notes: list[dict[str, Any]],
     ranges: list[tuple[int, int]],
 ) -> list[str]:
-    result = ["+"] * len(notes)
+    result = ["+~"] * len(notes)
     for line, (start, end) in zip(lines, ranges):
         if end <= start:
             continue
@@ -269,7 +269,7 @@ def _touch_slurs(ustx_notes: list[dict[str, Any]], max_gap_ticks: int) -> None:
     for i in range(1, len(ustx_notes)):
         cur = ustx_notes[i]
         prev = ustx_notes[i - 1]
-        if cur["lyric"] != "+":
+        if not str(cur["lyric"]).startswith("+"):
             continue
         gap = cur["position"] - (prev["position"] + prev["duration"])
         if 0 <= gap <= max_gap_ticks:
