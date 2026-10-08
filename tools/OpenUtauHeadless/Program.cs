@@ -268,13 +268,25 @@ static class Program {
                     $"[OpenUtau] Phonemes: total={total}, valid={valid}, errors={errors}");
 
                 if (errors > 0) {
-                    foreach (var ph in voiceParts
+                    var errorPhonemes = voiceParts
                         .SelectMany(p => p.phonemes)
                         .Where(ph => ph.Error)
-                        .Take(10)) {
+                        .ToList();
+
+                    foreach (var ph in errorPhonemes.Take(10)) {
                         Console.WriteLine(
                             $"[OpenUtau] Phoneme error: '{ph.phoneme}' "
                             + $"{ph.ErrorException?.Message ?? "(unknown)"}");
+                    }
+
+                    foreach (var ex in errorPhonemes
+                        .Select(ph => ph.ErrorException)
+                        .Where(ex => ex != null)
+                        .GroupBy(ex => ex!.ToString())
+                        .Select(g => g.First())
+                        .Take(3)) {
+                        Console.WriteLine("[OpenUtau] Detailed phonemizer exception:");
+                        Console.WriteLine(ex);
                     }
                 }
                 printedPhonemeErrors = true;
