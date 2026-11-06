@@ -196,8 +196,13 @@ def extend_instrumental_for_repeat(
         return instrumental
 
     output = track_work / "instrumental_extended.wav"
+    # The vocal repeat starts at dest_start, so the instrumental must also
+    # reach that exact timeline position. Previously atrim could not extend
+    # past the file's end: the repeat started too early, under silent vocals.
     filt = (
-        f"[0:a]atrim=start=0:end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
+        f"[0:a]atrim=start=0:end={dest_start:.6f},"
+        f"apad=whole_dur={dest_start:.6f},"
+        f"atrim=end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
         f"[0:a]atrim=start={source_start:.6f}:end={source_end:.6f},"
         "asetpts=PTS-STARTPTS[rep];"
         "[pre][rep]concat=n=2:v=0:a=1,"
