@@ -4,7 +4,7 @@ import unittest
 from vta.phonetics import source_syllables
 from vta.ustx import (
     LyricSection, _asr_words, _split_final_repeat, _source_syllable_cells,
-    _partition_words_into_sections,
+    _partition_words_into_sections, _select_source_words_for_sections,
 )
 
 
@@ -94,6 +94,32 @@ class FourSectionAlignmentTests(unittest.TestCase):
         for i in range(syllables % count):
             per_line[i] += 1
         return [" ".join(["ла"] * n) for n in per_line]
+
+    def test_explicit_outro_preserves_trailing_sung_phrase(self):
+        source = (
+            self._words(28.0, 56.94, 43, 77)
+            + self._words(59.44, 78.42, 27, 49)
+            + self._words(105.14, 134.24, 47, 84)
+            + self._words(135.88, 155.76, 27, 49)
+            + self._words(171.28, 179.88, 5, 9)
+        )
+        base_sections = [
+            LyricSection("Verse 1", self._lines(78, 10)),
+            LyricSection("Chorus", self._lines(49, 6)),
+            LyricSection("Verse 2", self._lines(86, 10)),
+            LyricSection("Chorus", self._lines(49, 6)),
+        ]
+        # No matching translated line: the historical behavior trims the coda.
+        normal = _select_source_words_for_sections(source, base_sections, 4.0)
+        self.assertEqual(len(normal), 144)
+
+        with_outro = base_sections + [LyricSection("Outro", self._lines(9, 1))]
+        selected = _select_source_words_for_sections(source, with_outro, 4.0)
+        self.assertEqual(len(selected), 149)
+        windows = _partition_words_into_sections(selected, with_outro)
+        self.assertEqual([len(window) for window in windows], [43, 27, 47, 27, 5])
+        self.assertAlmostEqual(windows[-1][0]["start"], 171.28)
+        self.assertAlmostEqual(windows[-1][-1]["end"], 179.88)
 
     def test_four_sections_do_not_cross_instrumental_break(self):
         source = (
