@@ -14,10 +14,10 @@ from pathlib import Path
 
 
 def run_inference(script: Path, seed: int, arguments: list[str]) -> None:
-    if not script.is_file():
-        raise FileNotFoundError(f"Seed-VC inference script does not exist: {script}")
     if seed < 0 or seed > (2**32 - 1):
         raise ValueError("Seed-VC random seed must be between 0 and 4294967295")
+    if not script.is_file():
+        raise FileNotFoundError(f"Seed-VC inference script does not exist: {script}")
 
     # PYTHONHASHSEED must be set by the PARENT process before Python starts.
     random.seed(seed)
