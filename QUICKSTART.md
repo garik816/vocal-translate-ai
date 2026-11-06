@@ -57,6 +57,8 @@ input/
 - `work/song/diffsinger/alignment.json` — розподіл рядків.
 - `work/song/melody/melody.json` — знайдена мелодія.
 
+**Порівнюєте кілька запусків Seed-VC?** Залиште однаковим `seed_vc_random_seed` у `config.json` (типово `42`), інакше випадковість дифузії може заважати об'єктивно оцінити зміни параметрів.
+
 ## 4. Отримайте фінальну пісню
 
 ```powershell
