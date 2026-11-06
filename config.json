@@ -32,6 +32,7 @@
   "seed_vc_diffusion_steps": 50,
   "low_vram_seed_vc_diffusion_steps": 20,
   "seed_vc_cfg_rate": 0.6,
+  "seed_vc_random_seed": 42,
   "seed_vc_pitch_shift": 0,
   "mix_vocal_gain_db": 0,
   "mix_instrumental_gain_db": 0,
