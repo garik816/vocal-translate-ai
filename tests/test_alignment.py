@@ -4,6 +4,7 @@ import unittest
 from vta.phonetics import source_syllables
 from vta.ustx import (
     LyricSection, _asr_words, _split_final_repeat, _source_syllable_cells,
+    _partition_words_into_sections,
 )
 
 
@@ -62,6 +63,61 @@ class ChorusRepeatTests(unittest.TestCase):
         self.assertIsNone(extra)
         self.assertIsNone(idx)
 
+
+
+class FourSectionAlignmentTests(unittest.TestCase):
+    """A synthetic 4-section song reproducing the failure pattern: two verses,
+    two choruses, an instrumental break, and similar syllable totals. No audio
+    or lyrics from any original recording are checked in.
+    """
+
+    @staticmethod
+    def _words(start, end, count, syllables):
+        per_word = [1] * count
+        for i in range(syllables - count):
+            per_word[i % count] += 1
+        span = (end - start) / count
+        return [
+            {
+                "start": start + i * span,
+                "end": start + (i + 1) * span,
+                "word": "synthetic",
+                "syllables": n,
+            }
+            for i, n in enumerate(per_word)
+        ]
+
+    @staticmethod
+    def _lines(syllables, count):
+        # One Cyrillic vowel per artificial syllable; no original song text.
+        per_line = [syllables // count] * count
+        for i in range(syllables % count):
+            per_line[i] += 1
+        return [" ".join(["ла"] * n) for n in per_line]
+
+    def test_four_sections_do_not_cross_instrumental_break(self):
+        source = (
+            self._words(28.0, 56.94, 43, 77)
+            + self._words(59.44, 78.42, 27, 49)
+            + self._words(105.14, 134.24, 47, 84)
+            + self._words(135.88, 155.76, 27, 49)
+        )
+        sections = [
+            LyricSection("Verse 1", self._lines(78, 10)),
+            LyricSection("Chorus", self._lines(49, 6)),
+            LyricSection("Verse 2", self._lines(86, 10)),
+            LyricSection("Chorus", self._lines(49, 6)),
+        ]
+        base, extra, _ = _split_final_repeat(sections, enabled=True)
+        self.assertIsNone(extra)
+        self.assertEqual(len(base), 4)
+        windows = _partition_words_into_sections(source, base)
+        self.assertEqual([len(x) for x in windows], [43, 27, 47, 27])
+        self.assertEqual(
+            [(round(x[0]["start"], 2), round(x[-1]["end"], 2)) for x in windows],
+            [(28.0, 56.94), (59.44, 78.42),
+             (105.14, 134.24), (135.88, 155.76)],
+        )
 
 if __name__ == "__main__":
     unittest.main()
