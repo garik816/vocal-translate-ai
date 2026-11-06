@@ -47,8 +47,13 @@ def run_demucs(original: Path, track_work: Path, cfg: dict[str, Any]) -> dict[st
     if cfg.get("reuse_demucs", True) and separated.exists():
         try:
             stems = locate_stems(separated)
-            log(f"[Demucs] Reusing stems: {stems['vocals'].parent}")
-            return stems
+            # Reusing a stem from a different revision of the MP3 would silently
+            # poison all downstream ASR, pitch and timbre extraction.
+            if all(path.stat().st_mtime_ns >= original.stat().st_mtime_ns
+                   for path in stems.values()):
+                log(f"[Demucs] Reusing stems: {stems['vocals'].parent}")
+                return stems
+            log("[Demucs] Original changed: invalidating stale separated stems.")
         except Exception:
             pass
 
