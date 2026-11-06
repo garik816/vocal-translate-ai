@@ -1,262 +1,358 @@
-# Vocal Translate AI v7.5.0
+<div align="center">
 
-Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
+# 🎙️ Vocal Translate AI
 
-> Quick start: see [QUICKSTART.md](QUICKSTART.md).
+### Нова мова. Оригінальна мелодія. Максимально близький тембр вокалу.
 
-## v7 pipeline
+Локальний конвеєр для створення **україномовної версії пісні** зі збереженням мелодії, ритмічної структури та інструментальної основи.
 
-```text
-input/song.mp3
-input/lyrics.txt
-        |
-        v
-Demucs -> vocals + instrumental
-        |
-        +-> ID3/Whisper -> source lyrics + word/segment timings
-        |
-        +-> F0 extraction -> melody / note events
-        |
-        v
-OpenUtau-Lunai + Ukrainian DiffSinger phonemizer
-        |
-        v
-clean Ukrainian guide vocal
-        |
-        +-> out/song_uk_guide.mp3
-        |
-        v
-Seed-VC -> source-singer timbre transfer
-        |
-        v
-FFmpeg -> out/song_uk.mp3
+![Version](https://img.shields.io/badge/version-7.6.0-2563eb)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078d4)
+![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76b900)
+![Status](https://img.shields.io/badge/status-experimental-f59e0b)
+
+**[Швидкий старт](#швидкий-старт) · [Підготовка тексту](#підготовка-тексту) · [Режими запуску](#режими-запуску) · [Налаштування](#налаштування) · [Діагностика](#діагностика)**
+
+</div>
+
+> [!IMPORTANT]
+> **Проєкт експериментальний.** Поточна версія виправляє низку помилок синхронізації, але **не гарантує студійної якості**. Найважливіший етап — правильний еквіритмічний переклад: український текст треба підготувати самостійно. Програма **не перекладає пісню автоматично** і не використовує Ollama або ComfyUI.
+
+## Що вміє проєкт
+
+| Можливість | Як реалізовано |
+| :-- | :-- |
+| Відокремлення вокалу від музики | **Demucs** |
+| Розпізнавання оригінального тексту й таймінгів слів | **ID3 + Whisper** |
+| Визначення нот і висоти оригінального співу | **librosa pYIN (F0)** |
+| Розміщення українських слів за фразами, складами та нотами | **Власний алгоритм вирівнювання → USTX** |
+| Синтез україномовного вокалу | **OpenUtau-Lunai + DiffSinger** |
+| Наближення тембру до оригінального виконавця | **Seed-VC** |
+| Зведення зі збереженим інструменталом | **FFmpeg** |
+| Оброблення кількох пісень | **Послідовний пакетний режим** |
+
+### Як це працює
+
+```mermaid
+flowchart TD
+    A["🎵 Оригінал MP3"] --> B["Demucs"]
+    B --> I["🎹 Інструментал"]
+    B --> V["🎤 Вокал оригіналу"]
+    V --> W["Whisper: текст і таймінги"]
+    V --> F["pYIN: висота нот"]
+    T["📝 Український lyrics.txt"] --> U["Вирівнювання USTX"]
+    W --> U
+    F --> U
+    U --> D["OpenUtau + DiffSinger"]
+    D --> G["Проміжний український вокал"]
+    G --> P["🎧 *_uk_guide.mp3"]
+    G --> S["Seed-VC: перенесення тембру"]
+    V --> R["Референс голосу"]
+    R --> S
+    S --> M["FFmpeg: фінальне зведення"]
+    I --> M
+    M --> O["✅ *_uk.mp3"]
 ```
 
-ACE-Step is no longer used in the v7 Ukrainian synthesis path.
+Оригінальний вокал використовується як джерело **мелодії, часових опор і зразка тембру**. Нові слова співає DiffSinger; Seed-VC змінює його тембр на основі референса. Це не просте накладання перекладеного мовлення на музику.
 
-## Input
+---
 
-Single track:
+## Системні вимоги
+
+- **Windows 10/11, 64-bit**; рекомендовано Windows 11.
+- **NVIDIA GPU з драйвером CUDA**. Є профілі для RTX 3080 / 3080 Ti (10–12 ГБ VRAM), сучасних NVIDIA та експериментальний полегшений профіль для GTX 970 4 ГБ.
+- **PowerShell** і **winget** для автоматичного встановлення залежностей; доступ до інтернету під час першого встановлення.
+- Вільне місце на SSD для моделей, робочих WAV-файлів і середовища Python.
+
+`setup.ps1` перевіряє та за потреби встановлює Git, `uv`, FFmpeg і **.NET 10 SDK**, створює окреме Python-середовище та завантажує потрібні моделі. Після першого запуску ресурси кешуються локально; повторне завантаження зазвичай не потрібне.
+
+> [!TIP]
+> На відеокарті з 12 ГБ VRAM краще **закрити ComfyUI і вивантажити активні моделі Ollama** перед синтезом. Не запускайте одночасно кілька важких GPU-процесів.
+
+## Швидкий старт
+
+### 1. Завантажте код
+
+Відкрийте **PowerShell**:
+
+```powershell
+git clone https://github.com/garik816/vocal-translate-ai.git
+cd .\vocal-translate-ai
+
+# Поки v7.6 перевіряється в окремій гілці:
+git switch fix/v7-6-vocal-quality
+```
+
+Після злиття змін у `main` додаткова команда `git switch` не знадобиться.
+
+### 2. Встановіть залежності
+
+```powershell
+.\SETUP_ONLY.bat
+```
+
+Інсталятор перевірить наявність утиліт, створить `runtime/`, завантажить Seed-VC, Whisper, Demucs, OpenUtau-Lunai та вокальний банк **Amaboshi Cipher v170**. Перший запуск потребує інтернету; якщо щось не встановилося, дивіться `logs/setup.log`.
+
+### 3. Додайте пісню та переклад
+
+```text
+vocal-translate-ai/
+└── input/
+    ├── song.mp3       # оригінальна пісня
+    └── lyrics.txt     # ГОТОВИЙ український еквіритмічний текст (UTF-8)
+```
+
+У `lyrics.txt` залишайте **той самий порядок куплетів і приспівів**, що й в оригіналі. Один рядок тексту бажано прирівнювати до однієї музичної фрази.
+
+### 4. Спочатку перевірте синтетичний вокал
+
+```powershell
+.\GUIDE_ONLY.bat
+```
+
+Послухайте файл **`out/song_uk_guide.mp3`**. Це український спів DiffSinger **до перенесення тембру**.
+
+Якщо тут неправильні слова, наголоси чи мелодія — спочатку виправте текст або нотне вирівнювання. Запуск Seed-VC цього не полагодить.
+
+### 5. Згенеруйте фінальну версію
+
+```powershell
+.\RUN.bat
+```
+
+Після оброблення перевірте **`out/song_uk.mp3`**. Він містить новий вокал із перенесеним тембром та інструментальну основу, відновлену Demucs.
+
+> **Важливо:** `RUN.bat` знову виконує необхідні етапи підготовки й синтезу; `GUIDE_ONLY.bat` — це окремий режим перевірки, а не команда «продовжити з останнього місця».
+
+---
+
+## Підготовка тексту
+
+Якість еквіритмічного тексту визначає, наскільки природно звучатиме результат. Намагайтеся зберегти:
+
+1. **Кількість складів** у кожній музичній фразі.
+2. **Наголоси** — на відповідних сильних долях.
+3. **Початок і закінчення рядків**, паузи та довгі голосні.
+4. **Послідовність секцій**: куплет, приспів, брідж.
+5. **Природну українську вимову**, а не дослівність перекладу будь-якою ціною.
+
+Приклад структури файлу (умовний текст):
+
+```text
+[Verse 1]
+Тихий вечір огортає місто,
+Світло тане у моїх руках.
+
+[Chorus]
+Ми зустрінемо новий світанок,
+І нехай лунає наша пісня.
+
+[Verse 2]
+Наступна строфа...
+
+[Chorus]
+Повтор приспіву...
+```
+
+`[Verse]`, `[Verse 1]`, `[Chorus]`, `[Bridge]` — маркери секцій, а не слова для співу. Збережіть TXT в **UTF-8**. Програма не змінює ваш авторський текст, хоча може нормалізувати невидимі символи під час синтезу.
+
+### Як додати додатковий фінальний приспів
+
+**Звичайний заключний `[Chorus]` залишається на своєму місці в оригінальній пісні.** Якщо хочете **додати новий приспів після завершення оригіналу**, запишіть останню секцію так:
+
+```text
+[Chorus repeat]
+Текст додаткового приспіву...
+```
+
+За умови `"append_final_repeated_section": true` програма візьме структуру попереднього приспіву, додасть інструментальний фрагмент і розмістить там новий вокал. **Не позначайте існуючий фінальний приспів як `repeat`.**
+
+---
+
+### Завершальна вокальна кода (Outro)
+
+Якщо **в оригіналі після довгої інструментальної паузи знову звучить спів**, а український текст закінчується раніше, додайте в самому кінці TXT окремий розділ:
+
+```text
+[Outro]
+Український еквіритмічний текст завершальної фрази
+```
+
+У такому випадку програма **залишить фінальні слова оригіналу в даних Whisper** і спробує вирівняти по них заключну українську фразу. Якщо `[Outro]` немає, короткий фінальний вокальний «хвіст» після довгої паузи може бути виключений із вирівнювання. Важливо: точність нот у тихому завершенні потребує окремої перевірки `guide.ustx` та `*_uk_guide.mp3`.
+
+## Пакетна обробка та голосові референси
+
+### Кілька пісень
 
 ```text
 input/
-  song.mp3
-  lyrics.txt
+├── song1.mp3
+├── song2.mp3
+└── lyrics/
+    ├── song1.txt
+    └── song2.txt
 ```
 
-Batch mode:
+Назви файлів перекладу мають збігатися з назвами MP3 без розширення. Також можна покласти `song1.txt` поруч із `song1.mp3`. За замовчуванням пісні обробляються **послідовно**, а один `lyrics.txt` не використовується автоматично для всіх треків.
+
+### Зразок тембру виконавця
+
+Можна передати чистий зразок співу у WAV:
 
 ```text
 input/
-  song1.mp3
-  song2.mp3
-  lyrics/
-    song1.txt
-    song2.txt
+├── song1.mp3
+├── song2.mp3
+├── reference.wav           # один зразок для всіх пісень (необов'язково)
+└── reference/
+    ├── song1.wav           # окремий зразок для song1
+    └── song2.wav
 ```
 
-The target TXT is treated as authoritative. The program does not rewrite it. Invisible Unicode characters are only normalized internally when needed by synthesis.
+Пріоритет: `input/reference/song1.wav` → `input/song1.wav` → `input/reference.wav` → **автоматично виділений вокал оригіналу**. За замовчуванням для Seed-VC береться приблизно **8 секунд**. Чистий вокал без музики й реверберації зазвичай є кращим референсом.
 
-Optional voice reference:
+## Режими запуску
+
+| Команда з папки проєкту | Дія |
+| :-- | :-- |
+| `.\SETUP_ONLY.bat` | Встановити й перевірити залежності |
+| `.\EXTRACT_LYRICS.bat` | Витягти оригінальний текст і часові позначки без синтезу |
+| `.\GUIDE_ONLY.bat` | Згенерувати український guide-вокал без Seed-VC |
+| `.\RUN.bat` | Повний конвеєр до фінального MP3 |
+| `.\DIAGNOSE.bat` | Перевірити стан середовища, створити діагностичний лог |
+| `.\FORCE_REPAIR.bat` | Примусово перевстановити/перевірити компоненти середовища |
+
+### Витягнення тексту оригіналу
+
+```powershell
+.\EXTRACT_LYRICS.bat
+```
+
+Програма шукає текст у ID3-тегах MP3 та використовує Whisper для розпізнавання вокалу й часових міток. Результат:
 
 ```text
-input/reference.wav
-input/reference/song1.wav
+out/
+├── song_source_lyrics.txt
+├── song_source_lyrics.srt
+└── song_source_lyrics.json
 ```
 
-If no reference is supplied, one is extracted automatically from the original vocal stem.
+**Ці файли — оригінальний текст**, а не готовий український переклад. Розпізнавання співу може помилятися; за потреби перевіряйте текст і таймінги вручну.
 
-## Source-text extraction
+---
 
-v7 can extract the original-language lyrics from the MP3.
+## Налаштування
 
-Run:
+Основні параметри знаходяться в **`config.json`**. Редагуйте файл у будь-якому текстовому редакторі, зберігаючи правильний JSON.
+
+| Параметр | Типове значення | Призначення |
+| :-- | :-- | :-- |
+| `asr_language` | `"auto"` | Мова оригіналу; для англійського вокалу можна вказати `"en"` |
+| `asr_model` | `"turbo"` | Модель Whisper |
+| `demucs_model` | `"htdemucs"` | Розділення джерел |
+| `melody_fmin` / `melody_fmax` | `55` / `880` | Межі пошуку основної частоти, Гц |
+| `diffsinger_singer` | `"Amaboshi Cipher"` | Проміжний україномовний голос |
+| `diffsinger_steps` | `30` | Кроки синтезу DiffSinger |
+| `seed_vc_enabled` | `true` | Перенесення тембру; `false` залишає guide-голос |
+| `seed_vc_random_seed` | `42` | Фіксоване випадкове зерно Seed-VC для відтворюваних порівнянь; не гарантує побітової ідентичності на різних GPU |
+| `seed_vc_diffusion_steps` | `50` | Кроки Seed-VC; для RTX 3080 профіль обмежує до 45 |
+| `reference_seconds` | `8` | Тривалість голосового референса |
+| `append_final_repeated_section` | `true` | Дозволити лише **явно позначений** фінальний повтор |
+| `mix_vocal_gain_db` | `0` | Рівень вокалу в фінальному міксі, dB |
+| `mix_instrumental_gain_db` | `0` | Рівень інструменталу, dB |
+| `output_bitrate` | `"320k"` | Бітрейт вихідного MP3 |
+
+Для тестування **не підвищуйте одразу всі параметри якості**: на GPU з 10–12 ГБ VRAM це може призвести до нестачі пам'яті без помітного покращення результату.
+
+## Результати та діагностичні файли
 
 ```text
-EXTRACT_LYRICS.bat
+out/
+├── song_uk_guide.mp3        # перевірка українського співу до Seed-VC
+├── song_uk.mp3              # фінальний мікс
+├── song_source_lyrics.txt   # текст оригіналу
+├── song_source_lyrics.srt   # субтитри з таймінгами
+└── song_source_lyrics.json  # слова / часові дані
+
+work/song/
+├── source_lyrics/
+├── melody/
+│   └── melody.json         # витягнуті ноти
+├── diffsinger/
+│   ├── guide.ustx          # проєкт нот і складів для OpenUtau
+│   ├── alignment.json      # розподіл фраз/рядків
+│   └── guide_uk.wav        # чистий guide-вокал
+└── seed_vc/                # результати перенесення тембру
+
+logs/
+├── setup.log
+├── run.log
+├── demucs.log
+├── asr.log
+├── melody.log
+├── diffsinger.log
+├── seed_vc.log
+├── ffmpeg.log
+└── diagnose.log
 ```
 
-The extractor checks embedded MP3 lyrics first and also runs Whisper on the Demucs vocal stem to obtain timing information.
+Файли в `work/` створюються під час оброблення; не всі каталоги існуватимуть після часткового запуску.
 
-Outputs:
+## Як перевірити якість
 
-```text
-out/song_source_lyrics.txt
-out/song_source_lyrics.srt
-out/song_source_lyrics.json
+**Послідовність перевірки важливіша за налаштування Seed-VC.**
+
+| Симптом | Де перевірити | Що робити |
+| :-- | :-- | :-- |
+| Слова пропущені або рядок починається не там | `out/*_uk_guide.mp3`, `alignment.json` | Перевірити структуру секцій, таймінги Whisper, еквіритмічність тексту |
+| Голос співає не ті ноти | `melody.json`, `guide.ustx` | Перевірити F0 та ноти, за потреби вручну відкоригувати USTX |
+| Українська вимова уривчаста або неправильна | `guide_uk.wav`, `logs/diffsinger.log` | Перевірити фонемізацію, розподіл складів, вокальний банк |
+| Guide гарний, але фінал хрипить або спотворений | `logs/seed_vc.log` | Перевірити референс, кроки Seed-VC, доступну VRAM |
+| У фіналі чутно залишки іншомовного вокалу | Інструментальний WAV після Demucs | Спробувати якіснішу сепарацію або студійний інструментал |
+| Вокал і музика розходяться після додаткового приспіву | `[Chorus repeat]`, `repeat_section_gap_s` | Перевірити, що додано саме **нову** секцію, а не повторено наявну |
+
+### Якщо щось не запускається
+
+1. Запустіть `.\DIAGNOSE.bat` і перегляньте `logs/diagnose.log`.
+2. За помилки встановлення перевірте `logs/setup.log`; за помилки синтезу — відповідний `logs/*.log`.
+3. Якщо середовище пошкоджене, запустіть `.\FORCE_REPAIR.bat`.
+4. Для проблем з одним рядком починайте з `GUIDE_ONLY.bat`: **поганий guide Seed-VC не виправить**.
+
+> [!WARNING]
+> **Обмеження алгоритму:** часові позначки Whisper даються для слів, а межі складів усередині слів оцінюються евристично. У складних піснях можливі помилки наголосів, нот, мелізмів і пауз. Вокальний референс не гарантує ідентичності голосу. Відокремлений Demucs інструментал не тотожний оригінальній студійній мінусовці.
+
+---
+
+## Для розробників
+
+- Основна логіка — `app.py` та `vta/`.
+- Оброблення тональності — `scripts/extract_melody.py`.
+- Генерація нот і USTX — `vta/ustx.py`.
+- Консольний OpenUtau — `tools/OpenUtauHeadless/`.
+- Регресійні тести — `tests/test_alignment.py`; також запускаються через GitHub Actions.
+- Деталі змін між версіями — **[CHANGELOG.md](CHANGELOG.md)**.
+
+Після встановлення залежностей перевірка без генерації аудіо:
+
+```powershell
+.\runtime\seed-vc\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The extracted source text is used for alignment/timing support. It never silently replaces the target Ukrainian lyrics.
+## Використані проєкти
 
-## Ukrainian synthesis
+[Demucs](https://github.com/facebookresearch/demucs) · [Whisper](https://github.com/openai/whisper) · [OpenUtau-Lunai](https://github.com/keirokeer/OpenUtau-lunai) · [Seed-VC](https://github.com/Plachtaa/seed-vc) · [FFmpeg](https://ffmpeg.org/)
 
-v7 uses OpenUtau-Lunai because it contains a native `DiffSingerUkrainianPhonemizer`.
+Проєкт зберігає аудіо, переклади, моделі, логи та результати локально; робочі каталоги й персональні аудіофайли виключено з Git через `.gitignore`.
 
-The default guide voice is **Amaboshi Cipher v170**, because this voicebank explicitly supports Ukrainian. Its timbre is only an intermediate guide; Seed-VC then transfers the source singer's timbre.
+### Авторські права та право на голос
 
-Generated diagnostics:
+Для публікації або комерційного використання перевірте права на **композицію, текст і його переклад, оригінальну фонограму та використання впізнаваного голосу виконавця**. Не видавайте AI-версію за справжній запис артиста без його дозволу.
 
-```text
-work/<song>/source_lyrics/
-work/<song>/melody/melody.json
-work/<song>/diffsinger/guide.ustx
-work/<song>/diffsinger/alignment.json
-work/<song>/diffsinger/guide_uk.wav
-```
+---
 
-The most important output for quality checking is:
+<div align="center">
 
-```text
-out/song_uk_guide.mp3
-```
+**[Повернутися до початку ↑](#-vocal-translate-ai)** · [Коротка інструкція](QUICKSTART.md) · [Історія змін](CHANGELOG.md)
 
-If this file already has bad Ukrainian pronunciation, the issue is in alignment/DiffSinger and Seed-VC should not be blamed. If the guide is clean but `song_uk.mp3` is damaged, the problem is in Seed-VC.
-
-## Final repeated chorus
-
-When the target lyrics contain an extra final chorus that is not present in the source structure, v7 can duplicate the previous chorus melody and instrumental section automatically:
-
-```json
-"append_final_repeated_section": true
-```
-
-The user's lyric text is still preserved.
-
-## GPU profiles
-
-Supported profiles:
-
-- **RTX 5080 / modern NVIDIA** — CUDA 12.8 PyTorch, Whisper on CUDA, DiffSinger via DirectML, full Seed-VC quality.
-- **RTX 3080 10/12 GB** — CUDA 12.8 PyTorch, CUDA Whisper, DirectML DiffSinger, slightly reduced Seed-VC load.
-- **GTX 970 4 GB** — legacy PyTorch CUDA 12.1 / `sm_52`; Whisper forced to CPU; lighter DiffSinger and Seed-VC settings.
-
-Demucs automatically falls back to CPU if its CUDA pass fails.
-
-## First run / downloads
-
-The first run needs Internet for:
-
-- Seed-VC repository and model weights;
-- Demucs model;
-- Whisper model;
-- OpenUtau-Lunai source/build dependencies;
-- Amaboshi Cipher DiffSinger voicebank;
-- Python/.NET dependencies.
-
-After these assets are cached locally, normal synthesis is local.
-
-## Logs
-
-```text
-logs/setup.log
-logs/run.log
-logs/demucs.log
-logs/asr.log
-logs/melody.log
-logs/diffsinger.log
-logs/seed_vc.log
-logs/ffmpeg.log
-logs/diagnose.log
-```
-
-Run `DIAGNOSE.bat` if something fails.
-
-## Repair
-
-- `SETUP_ONLY.bat` — verify/install missing dependencies.
-- `FORCE_REPAIR.bat` — force environment repair.
-- `EXTRACT_LYRICS.bat` — only source-text extraction.
-
-## Repository hygiene
-
-Audio, lyrics, generated output, downloaded models, runtime environments and logs are ignored by Git.
-
-## Rights
-
-For publication or commercial use, make sure you have the necessary rights for the song and any real person's voice likeness.
-
-
-## Why Nero was replaced
-
-Early v7 builds used Nero v170. OpenUtau loaded Nero correctly, but the Ukrainian phonemizer produced phonemes that Nero could not map: the whole phrase validated as errors. Amaboshi Cipher v170 is used instead because its multilingual DiffSinger release includes Ukrainian support.
-
-
-## v7.2 alignment change
-
-v7.2 no longer uses every extracted F0 segment as a lyric note.
-
-The timing pipeline is now:
-
-```text
-Whisper word timestamps -> target lyric lines -> Ukrainian syllables
-                                             |
-                                             v
-                                   one clean lyric note per syllable
-
-F0 extraction --------------------------------^
-                     pitch only; never decides where lyrics begin
-```
-
-This prevents instrument leakage in a Demucs vocal stem from creating fake lyric notes during intros/interludes. Instrumental gaps remain instrumental. Pitch extraction is now used only to choose the pitch of each ASR-anchored syllable note.
-
-
-## v7.3 pronunciation fix
-
-v7.2 still split Ukrainian target words into orthographic syllable fragments before handing them to the Ukrainian G2P. That made DiffSinger pronounce fragments as standalone lexical items and caused the broken/chopped diction heard in the guide.
-
-v7.3 changes the synthesis unit to a **whole Ukrainian word**:
-
-```text
-Whisper source-word timing -> target line -> target whole words
-F0                         -> pitch only
-```
-
-Each target word is sent intact to the Ukrainian phonemizer. Section timing is also solved independently for Verse/Chorus blocks using the strongest pauses in the original vocal, so a chorus cannot expand across an interlude or into the next verse.
-
-
-## v7.3.1 section-alignment fix
-
-v7.3 used the globally largest ASR pauses as section boundaries. On the current source track, Whisper hallucinated a short five-word island inside the long instrumental break; this created an impossible section with only five source words for six target lyric lines.
-
-v7.3.1:
-- removes tiny isolated ASR islands inside long instrumental gaps;
-- partitions Verse/Chorus sections with dynamic programming using target syllable weight and source pauses;
-- enforces enough source words for every target line;
-- detects when chorus 2 and the extra final chorus were written under one heading, splits them, and uses chorus 2 as the repeat template.
-
-
-## v7.4 pronunciation / melody refinement
-
-v7.3 fixed G2P by passing complete Ukrainian words, but it still placed an entire multi-syllable word on one pitch note. That made diction recognizable but robotic and blurred word stress.
-
-v7.4 keeps the whole word as one OpenUtau phonemizer group while giving each syllable its own note:
-
-```text
-сміттєвий   +   +
-   |        |   |
- syllable1  2   3
-```
-
-Only the first note contains the complete Ukrainian word; continuation notes use OpenUtau `+`, so Ukrainian G2P receives the intact lexical word exactly once and DiffSinger distributes its phonemes across the syllable notes.
-
-F0 is sampled separately for each syllable note, with conservative octave-error folding to reduce obvious pitch-tracker jumps.
-
-
-## v7.5 melody-aware syllable groups
-
-v7.4 correctly kept the whole Ukrainian word in one G2P group, but each target syllable still occupied one very large note. This produced exaggerated sustained vowels and smeared consonants.
-
-v7.5 uses OpenUtau's intended hierarchy:
-
-```text
-whole word -> lexical syllables -> pitch/melisma notes
-```
-
-For a multi-syllable word:
-- the first lexical syllable carries the complete Ukrainian word;
-- later lexical syllables use `+`;
-- extra source pitch changes inside one syllable use `+~`;
-- source F0 notes are clipped/merged inside each syllable timing cell instead of stretching one pitch across the whole syllable;
-- obvious octave-tracker jumps are folded conservatively.
-
-This keeps Ukrainian G2P lexical context while following the original sung melody more closely.
+</div>

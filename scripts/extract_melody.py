@@ -161,7 +161,7 @@ def main() -> int:
     ap.add_argument("--vocals", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--fmin", type=float, default=55.0)
-    ap.add_argument("--fmax", type=float, default=440.0)
+    ap.add_argument("--fmax", type=float, default=880.0)
     ap.add_argument("--min-note-ms", type=float, default=70.0)
     ap.add_argument("--max-gap-ms", type=float, default=90.0)
     args = ap.parse_args()

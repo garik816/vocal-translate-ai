@@ -10,9 +10,9 @@ from typing import Any
 import yaml
 
 from .common import log
+from .phonetics import source_syllables as count_source_syllables
 
 UK_VOWELS = set("аеєиіїоуюяАЕЄИІЇОУЮЯ")
-SRC_VOWELS = set("аеёиоуыэюяіїєАЕЁИОУЫЭЮЯІЇЄ")
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁёІіЇїЄєҐґ'’\-]+")
 SECTION_RE = re.compile(r"^\s*\[([^]]+)\]\s*$")
 HEADING_RE = re.compile(
@@ -83,9 +83,6 @@ def target_syllables(word: str) -> int:
     return max(1, sum(1 for ch in word if ch in UK_VOWELS))
 
 
-def source_syllables(word: str) -> int:
-    return max(1, sum(1 for ch in word if ch in SRC_VOWELS))
-
 
 def section_key(label: str) -> str:
     s = label.casefold()
@@ -101,6 +98,7 @@ def section_key(label: str) -> str:
 def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not asr:
         return []
+    source_language = str(asr.get("language") or "")
     out: list[dict[str, Any]] = []
     for item in asr.get("words", []) or []:
         try:
@@ -116,7 +114,7 @@ def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
             "end": end,
             "word": text,
             "probability": float(item.get("probability", 0.0) or 0.0),
-            "syllables": source_syllables(text),
+            "syllables": count_source_syllables(text, source_language),
         })
     out.sort(key=lambda w: (w["start"], w["end"]))
     return out
@@ -145,6 +143,23 @@ def _trim_trailing_outro(
         f"tail_words={len(words) - cut}."
     )
     return words[:cut]
+
+
+def _select_source_words_for_sections(
+    words: list[dict[str, Any]],
+    sections: list[LyricSection],
+    outro_gap_s: float,
+) -> list[dict[str, Any]]:
+    """Preserve final sung lyrics if the translation explicitly has an outro.
+
+    Otherwise preserve the v7 behavior that excludes trailing unaccounted
+    source lyrics, rather than stretching a normal chorus over a long gap.
+    """
+    outro_names = {"outro", "coda", "аутро", "кода", "кінцівка"}
+    if any(section_key(section.label) in outro_names for section in sections):
+        log("[Alignment] Explicit [Outro] supplied: keeping trailing source vocals.")
+        return words
+    return _trim_trailing_outro(words, outro_gap_s)
 
 
 def _remove_isolated_asr_islands(
@@ -948,6 +963,11 @@ def _split_final_repeat(
         return sections, None, None
 
     last = sections[-1]
+    # Repeating a normally labeled final chorus silently deletes real source
+    # material from alignment. Only an EXPLICIT extra-repeat label can do so.
+    label = last.label.casefold()
+    if not any(tag in label for tag in ("repeat", "повтор", "додатков")):
+        return sections, None, None
     if section_key(last.label) != "chorus":
         return sections, None, None
 
@@ -1038,9 +1058,10 @@ def build_ustx(
         append_repeat,
     )
 
-    source_words = _trim_trailing_outro(
-        _asr_words(asr),
-        float(cfg.get("asr_outro_gap_s", 4.0)),
+    source_words = _select_source_words_for_sections(
+        words=_asr_words(asr),
+        sections=base_sections,
+        outro_gap_s=float(cfg.get("asr_outro_gap_s", 4.0)),
     )
     source_words = _remove_isolated_asr_islands(
         source_words,

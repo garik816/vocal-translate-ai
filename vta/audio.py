@@ -47,8 +47,13 @@ def run_demucs(original: Path, track_work: Path, cfg: dict[str, Any]) -> dict[st
     if cfg.get("reuse_demucs", True) and separated.exists():
         try:
             stems = locate_stems(separated)
-            log(f"[Demucs] Reusing stems: {stems['vocals'].parent}")
-            return stems
+            # Reusing a stem from a different revision of the MP3 would silently
+            # poison all downstream ASR, pitch and timbre extraction.
+            if all(path.stat().st_mtime_ns >= original.stat().st_mtime_ns
+                   for path in stems.values()):
+                log(f"[Demucs] Reusing stems: {stems['vocals'].parent}")
+                return stems
+            log("[Demucs] Original changed: invalidating stale separated stems.")
         except Exception:
             pass
 
@@ -196,8 +201,13 @@ def extend_instrumental_for_repeat(
         return instrumental
 
     output = track_work / "instrumental_extended.wav"
+    # The vocal repeat starts at dest_start, so the instrumental must also
+    # reach that exact timeline position. Previously atrim could not extend
+    # past the file's end: the repeat started too early, under silent vocals.
     filt = (
-        f"[0:a]atrim=start=0:end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
+        f"[0:a]atrim=start=0:end={dest_start:.6f},"
+        f"apad=whole_dur={dest_start:.6f},"
+        f"atrim=end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
         f"[0:a]atrim=start={source_start:.6f}:end={source_end:.6f},"
         "asetpts=PTS-STARTPTS[rep];"
         "[pre][rep]concat=n=2:v=0:a=1,"
