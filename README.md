@@ -255,6 +255,7 @@ out/
 | `diffsinger_singer` | `"Amaboshi Cipher"` | Проміжний україномовний голос |
 | `diffsinger_steps` | `30` | Кроки синтезу DiffSinger |
 | `seed_vc_enabled` | `true` | Перенесення тембру; `false` залишає guide-голос |
+| `seed_vc_random_seed` | `42` | Фіксоване випадкове зерно Seed-VC для відтворюваних порівнянь; не гарантує побітової ідентичності на різних GPU |
 | `seed_vc_diffusion_steps` | `50` | Кроки Seed-VC; для RTX 3080 профіль обмежує до 45 |
 | `reference_seconds` | `8` | Тривалість голосового референса |
 | `append_final_repeated_section` | `true` | Дозволити лише **явно позначений** фінальний повтор |
