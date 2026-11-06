@@ -1,4 +1,4 @@
-# Vocal Translate AI v7.5.0
+# Vocal Translate AI v7.6.0
 
 Windows one-click pipeline for translating sung vocals into Ukrainian while preserving the original melody and timing.
 
@@ -260,3 +260,25 @@ For a multi-syllable word:
 - obvious octave-tracker jumps are folded conservatively.
 
 This keeps Ukrainian G2P lexical context while following the original sung melody more closely.
+
+
+## v7.6 alignment safety and regression checks
+
+- English source words now use CMU pronunciation data (with an offline heuristic fallback), instead of being counted as one syllable each.
+- ASR source language is passed into syllable estimation. Cyrillic source words still use vowel counting.
+- An ordinary final \`[Chorus]\` is **always aligned to existing source vocals**. A new extra chorus is produced only if the final lyric heading is explicitly \`[Chorus repeat]\` (or contains \`повтор\`) and \`append_final_repeated_section\` is enabled.
+- When an explicitly requested chorus is appended, the instrumental is padded to the repeat vocal's starting point to avoid desynchronization.
+- Demucs stems are refreshed when the source MP3 has a newer modification time; stale cached audio is not reused.
+- The pitch extractor's default upper limit was raised from 440 to 880 Hz for higher-register vocals.
+- \`tests/test_alignment.py\` and GitHub Actions check these alignment contracts.
+
+**Limitations:** word-level Whisper timestamps and proportional within-word syllable timing remain approximations; v7.6 is a structural bug-fix update, **not** a claim of studio-quality translated singing. It still requires comparison of \`*_uk_guide.mp3\` and \`*_uk.mp3\` against original source material. The exact original instrumentation is approximated by Demucs separation and reconstruction; a studio instrumental remains preferable.
+
+For **an explicit extra final chorus**, write a final heading like:
+
+\`\`\`text
+[Chorus repeat]
+...additional lyrics for this added chorus...
+\`\`\`
+
+Do not label a normal last chorus as a repeat. It will otherwise be appended after the song instead of aligned to its original position.
