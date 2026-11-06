@@ -145,6 +145,23 @@ def _trim_trailing_outro(
     return words[:cut]
 
 
+def _select_source_words_for_sections(
+    words: list[dict[str, Any]],
+    sections: list[LyricSection],
+    outro_gap_s: float,
+) -> list[dict[str, Any]]:
+    """Preserve final sung lyrics if the translation explicitly has an outro.
+
+    Otherwise preserve the v7 behavior that excludes trailing unaccounted
+    source lyrics, rather than stretching a normal chorus over a long gap.
+    """
+    outro_names = {"outro", "coda", "аутро", "кода", "кінцівка"}
+    if any(section_key(section.label) in outro_names for section in sections):
+        log("[Alignment] Explicit [Outro] supplied: keeping trailing source vocals.")
+        return words
+    return _trim_trailing_outro(words, outro_gap_s)
+
+
 def _remove_isolated_asr_islands(
     words: list[dict[str, Any]],
     min_gap_s: float = 2.0,
@@ -1041,9 +1058,10 @@ def build_ustx(
         append_repeat,
     )
 
-    source_words = _trim_trailing_outro(
-        _asr_words(asr),
-        float(cfg.get("asr_outro_gap_s", 4.0)),
+    source_words = _select_source_words_for_sections(
+        words=_asr_words(asr),
+        sections=base_sections,
+        outro_gap_s=float(cfg.get("asr_outro_gap_s", 4.0)),
     )
     source_words = _remove_isolated_asr_islands(
         source_words,
