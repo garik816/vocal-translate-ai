@@ -10,9 +10,9 @@ from typing import Any
 import yaml
 
 from .common import log
+from .phonetics import source_syllables as count_source_syllables
 
 UK_VOWELS = set("аеєиіїоуюяАЕЄИІЇОУЮЯ")
-SRC_VOWELS = set("аеёиоуыэюяіїєАЕЁИОУЫЭЮЯІЇЄ")
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁёІіЇїЄєҐґ'’\-]+")
 SECTION_RE = re.compile(r"^\s*\[([^]]+)\]\s*$")
 HEADING_RE = re.compile(
@@ -83,9 +83,6 @@ def target_syllables(word: str) -> int:
     return max(1, sum(1 for ch in word if ch in UK_VOWELS))
 
 
-def source_syllables(word: str) -> int:
-    return max(1, sum(1 for ch in word if ch in SRC_VOWELS))
-
 
 def section_key(label: str) -> str:
     s = label.casefold()
@@ -101,6 +98,7 @@ def section_key(label: str) -> str:
 def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not asr:
         return []
+    source_language = str(asr.get("language") or "")
     out: list[dict[str, Any]] = []
     for item in asr.get("words", []) or []:
         try:
@@ -116,7 +114,7 @@ def _asr_words(asr: dict[str, Any] | None) -> list[dict[str, Any]]:
             "end": end,
             "word": text,
             "probability": float(item.get("probability", 0.0) or 0.0),
-            "syllables": source_syllables(text),
+            "syllables": count_source_syllables(text, source_language),
         })
     out.sort(key=lambda w: (w["start"], w["end"]))
     return out
@@ -145,6 +143,23 @@ def _trim_trailing_outro(
         f"tail_words={len(words) - cut}."
     )
     return words[:cut]
+
+
+def _select_source_words_for_sections(
+    words: list[dict[str, Any]],
+    sections: list[LyricSection],
+    outro_gap_s: float,
+) -> list[dict[str, Any]]:
+    """Preserve final sung lyrics if the translation explicitly has an outro.
+
+    Otherwise preserve the v7 behavior that excludes trailing unaccounted
+    source lyrics, rather than stretching a normal chorus over a long gap.
+    """
+    outro_names = {"outro", "coda", "аутро", "кода", "кінцівка"}
+    if any(section_key(section.label) in outro_names for section in sections):
+        log("[Alignment] Explicit [Outro] supplied: keeping trailing source vocals.")
+        return words
+    return _trim_trailing_outro(words, outro_gap_s)
 
 
 def _remove_isolated_asr_islands(
@@ -767,6 +782,8 @@ def _pitch_events_for_syllable(
     previous_tone: int,
     max_events: int,
     min_event_s: float,
+    min_confidence: float = 0.22,
+    min_change_semitones: float = 2.0,
 ) -> list[dict[str, float]]:
     overlaps: list[dict[str, float]] = []
     for note in source_notes:
@@ -780,6 +797,7 @@ def _pitch_events_for_syllable(
             "start": a,
             "end": b,
             "tone": float(note.get("midi_float", note["midi"])),
+            "confidence": float(note.get("confidence", 1.0)),
         })
 
     if not overlaps:
@@ -797,6 +815,20 @@ def _pitch_events_for_syllable(
 
     overlaps.sort(key=lambda e: (e["start"], e["end"]))
 
+    # Low-confidence pYIN events are often instrument bleed or octave noise.
+    # Do not split a syllable into melismas unless confident F0 covers most
+    # of its voiced duration. Otherwise emit one sustained note.
+    covered = sum(e["end"] - e["start"] for e in overlaps)
+    reliable = [e for e in overlaps if e["confidence"] >= min_confidence]
+    reliable_covered = sum(e["end"] - e["start"] for e in reliable)
+    if reliable_covered < 0.55 * max(0.001, covered):
+        candidates = reliable or overlaps
+        anchor = max(candidates, key=lambda e: (e["end"] - e["start"]) *
+                     max(0.01, e["confidence"]))
+        return [{"start": start, "end": end, "tone": anchor["tone"]}]
+
+    overlaps = reliable
+
     # Merge nearly identical adjacent F0 events before constructing a
     # continuous syllable envelope.
     compact: list[dict[str, float]] = []
@@ -809,6 +841,18 @@ def _pitch_events_for_syllable(
             compact[-1]["end"] = max(compact[-1]["end"], event["end"])
         else:
             compact.append(dict(event))
+
+    # Tracker wobble of less than two semitones is not a separate melisma.
+    for i in range(1, len(compact)):
+        if abs(compact[i]["tone"] - compact[i - 1]["tone"]) < min_change_semitones:
+            compact[i]["tone"] = compact[i - 1]["tone"]
+    stable: list[dict[str, float]] = []
+    for event in compact:
+        if stable and abs(event["tone"] - stable[-1]["tone"]) < 0.1:
+            stable[-1]["end"] = event["end"]
+        else:
+            stable.append(event)
+    compact = stable
 
     # Convert voiced F0 events into one continuous word-internal melody
     # envelope. This is deliberate: OpenUtau continuation notes must touch
@@ -859,10 +903,17 @@ def _build_word_notes(
     cfg = cfg or {}
     word_map = _target_word_syllable_intervals(line, timing)
     out: list[dict[str, Any]] = []
-    previous_tone = 60
+    # Start at the source pitch of this phrase rather than C4; the previous
+    # default could transpose the first note by an octave.
+    previous_tone = _tone_for_interval(
+        timing.start, min(timing.end, timing.start + 0.4), source_notes,
+        fallback=60,
+    )
 
-    max_melisma = int(cfg.get("max_melisma_notes_per_syllable", 3))
-    min_pitch_event_s = float(cfg.get("min_pitch_event_ms", 90)) / 1000.0
+    max_melisma = int(cfg.get("max_melisma_notes_per_syllable", 1))
+    min_pitch_event_s = float(cfg.get("min_pitch_event_ms", 160)) / 1000.0
+    min_confidence = float(cfg.get("min_pitch_confidence", 0.22))
+    min_change = float(cfg.get("min_melisma_change_semitones", 2.0))
 
     for word, syllables in word_map:
         for syllable_index, (start, end) in enumerate(syllables):
@@ -873,6 +924,8 @@ def _build_word_notes(
                 previous_tone=previous_tone,
                 max_events=max_melisma,
                 min_event_s=min_pitch_event_s,
+                min_confidence=min_confidence,
+                min_change_semitones=min_change,
             )
 
             for event_index, event in enumerate(events):
@@ -948,6 +1001,11 @@ def _split_final_repeat(
         return sections, None, None
 
     last = sections[-1]
+    # Repeating a normally labeled final chorus silently deletes real source
+    # material from alignment. Only an EXPLICIT extra-repeat label can do so.
+    label = last.label.casefold()
+    if not any(tag in label for tag in ("repeat", "повтор", "додатков")):
+        return sections, None, None
     if section_key(last.label) != "chorus":
         return sections, None, None
 
@@ -1038,9 +1096,10 @@ def build_ustx(
         append_repeat,
     )
 
-    source_words = _trim_trailing_outro(
-        _asr_words(asr),
-        float(cfg.get("asr_outro_gap_s", 4.0)),
+    source_words = _select_source_words_for_sections(
+        words=_asr_words(asr),
+        sections=base_sections,
+        outro_gap_s=float(cfg.get("asr_outro_gap_s", 4.0)),
     )
     source_words = _remove_isolated_asr_islands(
         source_words,

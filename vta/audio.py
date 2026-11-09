@@ -47,8 +47,13 @@ def run_demucs(original: Path, track_work: Path, cfg: dict[str, Any]) -> dict[st
     if cfg.get("reuse_demucs", True) and separated.exists():
         try:
             stems = locate_stems(separated)
-            log(f"[Demucs] Reusing stems: {stems['vocals'].parent}")
-            return stems
+            # Reusing a stem from a different revision of the MP3 would silently
+            # poison all downstream ASR, pitch and timbre extraction.
+            if all(path.stat().st_mtime_ns >= original.stat().st_mtime_ns
+                   for path in stems.values()):
+                log(f"[Demucs] Reusing stems: {stems['vocals'].parent}")
+                return stems
+            log("[Demucs] Original changed: invalidating stale separated stems.")
         except Exception:
             pass
 
@@ -196,8 +201,13 @@ def extend_instrumental_for_repeat(
         return instrumental
 
     output = track_work / "instrumental_extended.wav"
+    # The vocal repeat starts at dest_start, so the instrumental must also
+    # reach that exact timeline position. Previously atrim could not extend
+    # past the file's end: the repeat started too early, under silent vocals.
     filt = (
-        f"[0:a]atrim=start=0:end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
+        f"[0:a]atrim=start=0:end={dest_start:.6f},"
+        f"apad=whole_dur={dest_start:.6f},"
+        f"atrim=end={dest_start:.6f},asetpts=PTS-STARTPTS[pre];"
         f"[0:a]atrim=start={source_start:.6f}:end={source_end:.6f},"
         "asetpts=PTS-STARTPTS[rep];"
         "[pre][rep]concat=n=2:v=0:a=1,"
@@ -278,13 +288,16 @@ def render_guide_preview(cfg: dict[str, Any], original: Path,
     vg = float(cfg.get("mix_vocal_gain_db", 0.0))
     ig = float(cfg.get("mix_instrumental_gain_db", 0.0))
     bitrate = str(cfg.get("output_bitrate", "320k"))
+    peak_limit = float(cfg.get("mix_peak_limit", 0.90))
+    if not (0.5 <= peak_limit <= 0.98):
+        raise ValueError("mix_peak_limit must be within [0.5, 0.98]")
     lang = str(cfg.get("vocal_language", "uk"))
     final = out_dir / f"{original.stem}_{lang}_guide.mp3"
     filt = (
         f"[0:a]volume={ig}dB[inst];"
         f"[1:a]volume={vg}dB[voc];"
         "[inst][voc]amix=inputs=2:duration=longest:normalize=0,"
-        "alimiter=limit=0.98:level=false[out]"
+        f"alimiter=limit={peak_limit:.3f}:level=false[out]"
     )
     run_logged(
         [
@@ -309,6 +322,9 @@ def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
     vg = float(cfg.get("mix_vocal_gain_db", 0.0))
     ig = float(cfg.get("mix_instrumental_gain_db", 0.0))
     bitrate = str(cfg.get("output_bitrate", "320k"))
+    peak_limit = float(cfg.get("mix_peak_limit", 0.90))
+    if not (0.5 <= peak_limit <= 0.98):
+        raise ValueError("mix_peak_limit must be within [0.5, 0.98]")
     lang = str(cfg.get("vocal_language", "uk"))
     results: list[Path] = []
 
@@ -319,7 +335,7 @@ def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
             f"[1:a]volume={vg}dB[voc];"
             "[inst][voc]"
             "amix=inputs=2:duration=longest:normalize=0,"
-            "alimiter=limit=0.98:level=false[out]"
+            f"alimiter=limit={peak_limit:.3f}:level=false[out]"
         )
         run_logged(
             [

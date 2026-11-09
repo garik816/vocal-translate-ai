@@ -1,46 +1,51 @@
-INPUT FOLDER - Vocal Translate AI v7
+ВХІДНІ ФАЙЛИ — Vocal Translate AI v7.6
 
-SINGLE TRACK:
-  song.mp3
-  lyrics.txt
+ШВИДКИЙ ПРИКЛАД (одна пісня):
+  song.mp3             — оригінал
+  lyrics.txt           — готовий український еквіритмічний текст (UTF-8)
 
-BATCH:
+КІЛЬКА ПІСЕНЬ:
   song1.mp3
   song2.mp3
   lyrics\song1.txt
   lyrics\song2.txt
 
-You can also place matching lyric files beside the MP3:
-  song1.mp3
-  song1.txt
+Варіант: song1.txt можна покласти поруч із song1.mp3.
+У пакетному режимі імена TXT мають збігатися з MP3.
 
-Optional per-track voice references:
-  reference\song1.wav
-  reference\song2.wav
+СТРУКТУРА lyrics.txt:
+  [Verse 1]
+  Рядки українського тексту (за вокальними фразами)
 
-Fallback shared reference:
-  reference.wav
+  [Chorus]
+  Рядки українського приспіву
 
-If no reference WAV exists, the program automatically creates one
-from each track's Demucs vocal stem.
+  [Chorus repeat]
+  Лише якщо потрібно ДОДАТИ ще один фінальний приспів.
+  Не позначайте цим заголовком звичайний останній приспів!
 
-SOURCE LYRICS EXTRACTION:
-  Run EXTRACT_LYRICS.bat
+ЗРАЗКИ ГОЛОСУ (необов'язково):
+  reference\song1.wav  — пріоритет для song1
+  song1.wav            — запасний варіант для song1
+  reference.wav        — спільний референс
+Якщо їх немає — використовується вокал, виділений Demucs.
 
-Outputs:
-  out\song_source_lyrics.txt
-  out\song_source_lyrics.srt
-  out\song_source_lyrics.json
+ЗАПУСК ІЗ КОРЕНЯ ПРОЄКТУ:
+  SETUP_ONLY.bat       — перевірка залежностей
+  EXTRACT_LYRICS.bat   — розпізнати слова оригіналу
+  GUIDE_ONLY.bat       — прослухати український синтетичний вокал
+  RUN.bat              — повна обробка
+  DIAGNOSE.bat         — діагностика
 
-The extracted source lyrics are used for timing/alignment support.
-They never replace your target Ukrainian TXT automatically.
+ВИХІДНІ ФАЙЛИ:
+  out\song_uk_guide.mp3     — до перенесення тембру
+  out\song_uk.mp3           — фінальний мікс
+  out\song_source_lyrics.*  — оригінальний текст і таймінги
 
-V7 OUTPUT:
-  out\song_uk_guide.mp3   - Ukrainian DiffSinger before Seed-VC
-  out\song_uk.mp3         - final voice-converted mix
+ВАЖЛИВО:
+  - Програма НЕ перекладає текст автоматично.
+  - Спів у guide потрібно перевірити перед запуском повного конвеєра.
+  - Пісні обробляються послідовно, щоб зменшити навантаження на GPU.
+  - Аудіо, тексти й результати не потрапляють у Git (.gitignore).
 
-Important:
-- One or many MP3 files are supported.
-- In batch mode, lyric filenames must match MP3 filenames.
-- Processing is sequential to avoid exhausting GPU VRAM.
-- Audio, lyrics, runtime models and generated data are ignored by Git.
+Докладніше: README.md та QUICKSTART.md у корені репозиторію.

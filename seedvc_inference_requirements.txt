@@ -12,3 +12,4 @@ hf_xet
 demucs==4.0.1
 openai-whisper
 mutagen>=1.47.0
+cmudict>=1.0.31

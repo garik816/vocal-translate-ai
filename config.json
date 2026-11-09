@@ -16,7 +16,7 @@
   "reuse_demucs": true,
   "reuse_melody": true,
   "melody_fmin": 55,
-  "melody_fmax": 440,
+  "melody_fmax": 880,
   "melody_min_note_ms": 70,
   "melody_max_gap_ms": 90,
   "diffsinger_singer": "Amaboshi Cipher",
@@ -32,6 +32,7 @@
   "seed_vc_diffusion_steps": 50,
   "low_vram_seed_vc_diffusion_steps": 20,
   "seed_vc_cfg_rate": 0.6,
+  "seed_vc_random_seed": 42,
   "seed_vc_pitch_shift": 0,
   "mix_vocal_gain_db": 0,
   "mix_instrumental_gain_db": 0,
@@ -45,6 +46,9 @@
   "asr_island_max_words": 5,
   "asr_island_max_duration_s": 4,
   "pitch_octave_stabilization": true,
-  "max_melisma_notes_per_syllable": 3,
-  "min_pitch_event_ms": 90
+  "max_melisma_notes_per_syllable": 1,
+  "min_pitch_event_ms": 160,
+  "min_pitch_confidence": 0.22,
+  "min_melisma_change_semitones": 2.0,
+  "mix_peak_limit": 0.90
 }

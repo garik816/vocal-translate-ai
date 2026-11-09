@@ -5,7 +5,7 @@ chcp 65001 >nul
 if not exist "logs" mkdir "logs"
 
 echo ============================================================
-echo Vocal Translate AI v7.5.0 - GUIDE ONLY
+echo Vocal Translate AI v7.6.0 - GUIDE ONLY
 echo DiffSinger preview only. Seed-VC is skipped.
 echo ============================================================
 echo.
