@@ -59,6 +59,38 @@ class VocalFirstTests(unittest.TestCase):
                 melody.assert_not_called()
                 synth.assert_not_called()
 
+    def test_missing_ace_cover_fails_before_running_demucs(self):
+        with tempfile.TemporaryDirectory() as root:
+            song = Path(root) / "song.mp3"
+            song.write_bytes(b"test")
+            with patch.object(app, "WORK_DIR", Path(root)), \
+                 patch.object(app.audio, "run_demucs") as demucs, \
+                 patch.object(app.audio, "build_reference") as reference:
+                with self.assertRaisesRegex(FileNotFoundError, "ACE_ONLY.bat"):
+                    app.process_track(
+                        song, {"vocal_generation_mode": "external_guide"},
+                        "ffmpeg", 1, extract_only=False, guide_only=True,
+                        from_ace=True,
+                    )
+                demucs.assert_not_called()
+                reference.assert_not_called()
+
+    def test_missing_manual_guide_explains_ace_workflow(self):
+        with tempfile.TemporaryDirectory() as root:
+            song = Path(root) / "song.mp3"
+            song.write_bytes(b"test")
+            with patch.object(app, "WORK_DIR", Path(root)), \
+                 patch.object(app.guide, "find_external_guide",
+                              side_effect=FileNotFoundError("No guide")) as finder, \
+                 patch.object(app.audio, "run_demucs") as demucs:
+                with self.assertRaisesRegex(FileNotFoundError, "ACE_ONLY.bat"):
+                    app.process_track(
+                        song, {"vocal_generation_mode": "external_guide"},
+                        "ffmpeg", 1, extract_only=False, guide_only=True,
+                    )
+                finder.assert_called_once()
+                demucs.assert_not_called()
+
     def test_ace_only_does_not_load_demucs_or_seedvc(self):
         with tempfile.TemporaryDirectory() as root:
             song = Path(root) / "song.mp3"
