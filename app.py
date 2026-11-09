@@ -45,6 +45,8 @@ def process_track(
     total_tracks: int,
     extract_only: bool,
     guide_only: bool,
+    ace_only: bool = False,
+    from_ace: bool = False,
 ) -> list[Path]:
     track_work = WORK_DIR / original.stem
     track_work.mkdir(parents=True, exist_ok=True)
@@ -54,12 +56,30 @@ def process_track(
     log(f"TRACK: {original.name}")
     log("=" * 72)
 
-    mode = str(cfg.get("vocal_generation_mode", "ace_cover")).strip().lower()
+    mode = str(cfg.get("vocal_generation_mode", "external_guide")).strip().lower()
+    if from_ace:
+        mode = "external_guide"
     if mode not in {"ace_cover", "external_guide", "diffsinger"}:
         raise ValueError(
             "Invalid vocal_generation_mode: " + repr(mode)
             + "; choose ace_cover, external_guide, or diffsinger."
         )
+    if ace_only:
+        # Phase 1: only ACE-Step, no Demucs or Seed-VC in GPU memory.
+        if str(cfg.get("ace_source_mode", "full_mix")).lower() != "full_mix":
+            raise ValueError("--ace-only requires ace_source_mode=full_mix.")
+        lyrics = find_lyrics_for(original, cfg, total_tracks)
+        base_url = str(cfg.get("ace_api_url", "http://127.0.0.1:8001")).rstrip("/")
+        if not net.health_ok(base_url):
+            raise RuntimeError("ACE-Step API is not reachable at " + base_url +
+                ". Run start_api_server.bat in ACE-Step-1.5 first.")
+        covers = ace.generate(cfg, base_url, original, original, lyrics, track_work)
+        for cover in covers:
+            log(f"[ACE] Saved generated cover: {cover}")
+        log("[Mode] ACE cover complete. Stop the ACE-Step API server " +
+            "before processing it with --from-ace on a 12GB GPU.")
+        return covers
+
     stems = audio.run_demucs(original, track_work, cfg)
 
     # Whisper/F0/USTX are *not* part of the ACE/guide-first synthesis modes.
@@ -135,9 +155,14 @@ def process_track(
         final_instrumental = instrumental
 
     else:  # external_guide
-        external = guide.find_external_guide(original, total_tracks)
+        if from_ace:
+            external = track_work / "ace_guides" / "guide_01.wav"
+            if not external.is_file():
+                raise FileNotFoundError(f"ACE cover not found: {external}. Run ACE_ONLY.bat first.")
+        else:
+            external = guide.find_external_guide(original, total_tracks)
         log(f"[Guide] Using externally sung guide: {external}")
-        if cfg.get("external_guide_is_mix", False):
+        if from_ace or cfg.get("external_guide_is_mix", False):
             # Allows manually generated ACE-Step covers as input.
             external = audio.isolate_guide_vocals(
                 [external], track_work, {**cfg, "post_ace_demucs": True}
@@ -182,11 +207,21 @@ def main() -> int:
         help="Only extract source lyrics/timings from input MP3 files.",
     )
     parser.add_argument(
+        "--ace-only", action="store_true",
+        help="Generate ACE-Step covers only; requires local ACE API.",
+    )
+    parser.add_argument(
+        "--from-ace", action="store_true",
+        help="Use previous ACE cover from work/<song>/ace_guides/guide_01.wav.",
+    )
+    parser.add_argument(
         "--guide-only",
         action="store_true",
         help="Render DiffSinger guide preview and stop before Seed-VC.",
     )
     args = parser.parse_args()
+    if args.ace_only and (args.from_ace or args.guide_only or args.extract_only):
+        parser.error("--ace-only cannot be combined with other modes.")
 
     for path in (LOG_DIR, OUT_DIR, WORK_DIR):
         path.mkdir(parents=True, exist_ok=True)
@@ -202,6 +237,8 @@ def main() -> int:
     mode = (
         "extract-only"
         if args.extract_only
+        else "ace-only"
+        if args.ace_only
         else "guide-only"
         if args.guide_only
         else "full pipeline"
@@ -221,6 +258,8 @@ def main() -> int:
                 total_tracks=len(originals),
                 extract_only=args.extract_only,
                 guide_only=args.guide_only,
+                ace_only=args.ace_only,
+                from_ace=args.from_ace,
             )
             successes.append((original, outputs))
         except Exception as exc:
