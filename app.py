@@ -80,6 +80,29 @@ def process_track(
             "before processing it with --from-ace on a 12GB GPU.")
         return covers
 
+    # Validate the vocal INPUT before invoking expensive Demucs/FFmpeg.
+    # V8's GUIDE_ONLY.bat does not generate a cover: ACE_ONLY.bat must run first.
+    external = None
+    if not extract_only and mode == "external_guide":
+        if from_ace:
+            external = track_work / "ace_guides" / "guide_01.wav"
+            if not external.is_file():
+                raise FileNotFoundError(
+                    "Missing ACE-Step cover for " + original.name + ": " + str(external)
+                    + ". First start ACE-Step API and run ACE_ONLY.bat. "
+                    "Then stop ACE-Step API and run FROM_ACE_GUIDE_ONLY.bat. "
+                    "GUIDE_ONLY.bat alone does not generate a cover."
+                )
+        else:
+            try:
+                external = guide.find_external_guide(original, total_tracks)
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    str(exc) + " To generate the guide with ACE-Step instead, "
+                    "run ACE_ONLY.bat, then FROM_ACE_GUIDE_ONLY.bat. "
+                    "See V8_WORKFLOW.md."
+                ) from exc
+
     stems = audio.run_demucs(original, track_work, cfg)
 
     # Whisper/F0/USTX are *not* part of the ACE/guide-first synthesis modes.
@@ -155,12 +178,7 @@ def process_track(
         final_instrumental = instrumental
 
     else:  # external_guide
-        if from_ace:
-            external = track_work / "ace_guides" / "guide_01.wav"
-            if not external.is_file():
-                raise FileNotFoundError(f"ACE cover not found: {external}. Run ACE_ONLY.bat first.")
-        else:
-            external = guide.find_external_guide(original, total_tracks)
+        assert external is not None  # checked before loading Demucs
         log(f"[Guide] Using externally sung guide: {external}")
         if from_ace or cfg.get("external_guide_is_mix", False):
             # Allows manually generated ACE-Step covers as input.
