@@ -5,8 +5,8 @@ chcp 65001 >nul
 if not exist "logs" mkdir "logs"
 
 echo ============================================================
-echo Vocal Translate AI v7.6.0
-echo MP3 + Ukrainian lyrics -^> DiffSinger -^> Seed-VC -^> MP3
+echo Vocal Translate AI v8.0 experimental
+echo Full-timeline guide vocal -^> Seed-VC -^> original instrumental
 echo ============================================================
 echo.
 echo [%date% %time%] RUN started>>"logs\launcher.log"
