@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> **v8 — експериментальний вокальний конвеєр ACE-Step → Demucs → Seed-VC.**
+> Замість автоматичних нот DiffSinger використовується цілісний україномовний спів.
+> **[Нова покрокова інструкція V8_WORKFLOW.md](V8_WORKFLOW.md)**.
+> Для RTX 3080 Ti рекомендовано запускати генерацію і конвертацію **окремо**:
+> `ACE_ONLY.bat` → зупинити ACE-Step API → `FROM_ACE_GUIDE_ONLY.bat` → `FROM_ACE.bat`.
+> Нижче наведено документацію попереднього шляху v7 (його все ще можна обрати в `config.json`).
+>
 <div align="center">
 
 # 🎙️ Vocal Translate AI
