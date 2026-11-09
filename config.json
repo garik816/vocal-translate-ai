@@ -46,7 +46,7 @@
   "asr_island_max_words": 5,
   "asr_island_max_duration_s": 4,
   "pitch_octave_stabilization": true,
-  "max_melisma_notes_per_syllable": 2,
+  "max_melisma_notes_per_syllable": 1,
   "min_pitch_event_ms": 160,
   "min_pitch_confidence": 0.22,
   "min_melisma_change_semitones": 2.0,
