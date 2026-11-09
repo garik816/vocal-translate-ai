@@ -130,7 +130,14 @@ function Download-File([string]$Url, [string]$Destination) {
 }
 
 try {
-    Write-Host '=== Vocal Translate AI v7.5.0.1: setup / verify ==='
+    Write-Host '=== Vocal Translate AI v8: setup / verify ==='
+    $ProjectCfgPath = Join-Path $Root 'config.json'
+    $LegacyDiffSinger = $false
+    if (Test-Path $ProjectCfgPath) {
+        $ProjectCfg = Get-Content -LiteralPath $ProjectCfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $LegacyDiffSinger = [string]$ProjectCfg.vocal_generation_mode -eq 'diffsinger'
+    }
+    Write-Host "[Mode] Legacy DiffSinger requested: $LegacyDiffSinger"
     Refresh-Path
 
     $env:UV_HTTP_TIMEOUT = '180'
@@ -141,7 +148,11 @@ try {
     Ensure-WingetPackage 'git' 'Git.Git'
     Ensure-WingetPackage 'uv' 'astral-sh.uv'
     Ensure-WingetPackage 'ffmpeg' 'Gyan.FFmpeg'
-    Ensure-DotNet10
+    if ($LegacyDiffSinger) {
+        Ensure-DotNet10
+    } else {
+        Write-Host '[V8] Skipping .NET 10 and OpenUtau/DiffSinger setup in vocal-first mode.'
+    }
 
     # GPU detection.
     $GpuName = 'unknown'
@@ -253,6 +264,13 @@ try {
         throw 'Seed-VC inference.py is missing.'
     }
 
+    if (-not $LegacyDiffSinger) {
+        Set-Content -Path (Join-Path $Runtime '.last_setup_ok') -Value (Get-Date -Format o) -Encoding ascii
+        Write-Host ''
+        Write-Host 'V8 VOCAL-FIRST SETUP / VERIFY COMPLETE.' -ForegroundColor Green
+        exit 0
+    }
+
     # OpenUtau-Lunai contains the Ukrainian DiffSinger phonemizer.
     if (-not (Test-Path (Join-Path $OpenUtau '.git'))) {
         Write-Host '[OpenUtau] Cloning OpenUtau-Lunai...'
@@ -338,7 +356,7 @@ try {
 
     Set-Content -Path (Join-Path $Runtime '.last_setup_ok') -Value (Get-Date -Format o) -Encoding ascii
     Write-Host ''
-    Write-Host 'V7 SETUP / VERIFY COMPLETE.' -ForegroundColor Green
+    Write-Host 'V8 LEGACY DIFFSINGER SETUP / VERIFY COMPLETE.' -ForegroundColor Green
     exit 0
 } catch {
     Write-Host ''
