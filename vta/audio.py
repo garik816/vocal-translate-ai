@@ -288,13 +288,16 @@ def render_guide_preview(cfg: dict[str, Any], original: Path,
     vg = float(cfg.get("mix_vocal_gain_db", 0.0))
     ig = float(cfg.get("mix_instrumental_gain_db", 0.0))
     bitrate = str(cfg.get("output_bitrate", "320k"))
+    peak_limit = float(cfg.get("mix_peak_limit", 0.90))
+    if not (0.5 <= peak_limit <= 0.98):
+        raise ValueError("mix_peak_limit must be within [0.5, 0.98]")
     lang = str(cfg.get("vocal_language", "uk"))
     final = out_dir / f"{original.stem}_{lang}_guide.mp3"
     filt = (
         f"[0:a]volume={ig}dB[inst];"
         f"[1:a]volume={vg}dB[voc];"
         "[inst][voc]amix=inputs=2:duration=longest:normalize=0,"
-        "alimiter=limit=0.98:level=false[out]"
+        f"alimiter=limit={peak_limit:.3f}:level=false[out]"
     )
     run_logged(
         [
@@ -319,6 +322,9 @@ def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
     vg = float(cfg.get("mix_vocal_gain_db", 0.0))
     ig = float(cfg.get("mix_instrumental_gain_db", 0.0))
     bitrate = str(cfg.get("output_bitrate", "320k"))
+    peak_limit = float(cfg.get("mix_peak_limit", 0.90))
+    if not (0.5 <= peak_limit <= 0.98):
+        raise ValueError("mix_peak_limit must be within [0.5, 0.98]")
     lang = str(cfg.get("vocal_language", "uk"))
     results: list[Path] = []
 
@@ -329,7 +335,7 @@ def render_final(cfg: dict[str, Any], original: Path, instrumental: Path,
             f"[1:a]volume={vg}dB[voc];"
             "[inst][voc]"
             "amix=inputs=2:duration=longest:normalize=0,"
-            "alimiter=limit=0.98:level=false[out]"
+            f"alimiter=limit={peak_limit:.3f}:level=false[out]"
         )
         run_logged(
             [
