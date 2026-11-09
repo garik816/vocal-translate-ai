@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import log
+from .guide import audio_duration
 from .net import download, post_json, post_multipart
 
 
@@ -35,9 +36,9 @@ def lyrics_text(path: Path, language: str) -> str:
     text = _normalize_synthesis_text(raw, language)
     if text != raw:
         log("[Lyrics] Applied synthesis-only Unicode cleanup; source TXT unchanged.")
-    if "# Lyric" in text:
-        return text
-    return f"# Languages\n{language}\n\n# Lyric\n{text}\n"
+    # ACE-Step 1.5 accepts raw lyrics with [Verse]/[Chorus] labels.
+    # The old "# Languages / # Lyric" header was not part of its API.
+    return text
 
 
 def _mime(path: Path) -> str:
@@ -63,7 +64,8 @@ def _fingerprint(cfg: dict[str, Any], source: Path, reference: Path,
         "caption": cfg.get("caption", ""),
         "model": cfg.get("ace_model", "acestep-v15-turbo"),
         "cover_strength": cfg.get("cover_strength", 1.0),
-        "cover_noise_strength": cfg.get("cover_noise_strength", 0.25),
+        "duration": round(audio_duration(source), 3),
+        "seed": cfg.get("ace_seed", 42),
         "steps": cfg.get("ace_inference_steps", 8),
         "batch": cfg.get("ace_batch_size", 1),
     }
@@ -99,12 +101,13 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
 
     language = str(cfg.get("vocal_language", "uk"))
     fields = {
-        "prompt": str(cfg.get("caption", "")),
+        "prompt": str(cfg.get("caption", "Male Ukrainian singing, close to source melody and tempo, clear pronunciation, natural phrasing")),
         "lyrics": lyrics_text(lyrics_path, language),
         "vocal_language": language,
+        "audio_duration": f"{audio_duration(source):.3f}",
+        "seed": str(cfg.get("ace_seed", 42)),
         "task_type": "cover",
         "audio_cover_strength": str(cfg.get("cover_strength", 1.0)),
-        "cover_noise_strength": str(cfg.get("cover_noise_strength", 0.25)),
         "inference_steps": str(cfg.get("ace_inference_steps", 8)),
         "guidance_scale": str(cfg.get("ace_guidance_scale", 7.0)),
         "batch_size": str(cfg.get("ace_batch_size", 1)),
@@ -137,7 +140,10 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
     task_id = payload["data"]["task_id"]
     log(f"[ACE] Task ID: {task_id}")
     last_log = 0.0
+    deadline = time.monotonic() + float(cfg.get("ace_task_timeout_s", 1200))
     while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("ACE-Step cover timed out; check your local API server.")
         time.sleep(3)
         result = post_json(f"{base_url}/query_result", {"task_id_list": [task_id]}, 60)
         if not result.get("data"):
@@ -168,6 +174,8 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
             if str(file_url).startswith("http")
             else urllib.parse.urljoin(base_url, str(file_url))
         )
+        if urllib.parse.urlsplit(url).netloc != urllib.parse.urlsplit(base_url).netloc:
+            raise RuntimeError("ACE-Step returned an unexpected remote audio URL.")
         out = guide_dir / f"guide_{index:02d}.wav"
         download(url, out)
         guides.append(out)
