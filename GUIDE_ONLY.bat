@@ -17,8 +17,11 @@ if %errorlevel%==0 (
     set "PS=powershell"
 )
 
-%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-if errorlevel 1 goto :fail
+rem The environment is reused between runs; rebuilding OpenUtau each time is not needed.
+if not exist "runtime\seed-vc\.venv\Scripts\python.exe" (
+    %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
+    if errorlevel 1 goto :fail
+)
 
 set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :fail
@@ -33,6 +36,6 @@ exit /b 0
 
 :fail
 echo.
-echo FAILED. Check logs\run.log and logs\diffsinger.log
+echo FAILED. Check logs\run.log. For ACE covers run ACE_ONLY.bat first, then FROM_ACE_GUIDE_ONLY.bat
 pause
 exit /b 1
