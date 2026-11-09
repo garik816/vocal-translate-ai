@@ -1,3 +1,16 @@
+V8 — ЦІЛІСНИЙ ВОКАЛ:
+  song.mp3 + lyrics.txt — для ACE_ONLY.bat (створення кавера)
+  guide.wav            — готовий ЧИСТИЙ український вокал для GUIDE_ONLY.bat і RUN.bat
+  guide\\song1.wav     — окремий вокал для кожної пісні у batch-режимі
+
+ПОСЛІДОВНІСТЬ V8: ACE_ONLY.bat -> зупинити ACE API ->
+FROM_ACE_GUIDE_ONLY.bat -> FROM_ACE.bat.
+Якщо зовнішній guide містить ще й інструменти, налаштуйте
+"external_guide_is_mix": true у config.json.
+Повна інструкція: V8_WORKFLOW.md у корені проєкту.
+
+--------- V7 інструкція нижче ---------
+
 ВХІДНІ ФАЙЛИ — Vocal Translate AI v7.6
 
 ШВИДКИЙ ПРИКЛАД (одна пісня):
