@@ -9,8 +9,11 @@ echo ============================================================
 echo.
 where pwsh >nul 2>&1
 if %errorlevel%==0 (set "PS=pwsh") else (set "PS=powershell")
-%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-if errorlevel 1 goto :fail
+rem The environment is reused between runs; rebuilding OpenUtau each time is not needed.
+if not exist "runtime\seed-vc\.venv\Scripts\python.exe" (
+    %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
+    if errorlevel 1 goto :fail
+)
 set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :fail
 "%PY%" "%~dp0app.py" --ace-only
