@@ -910,7 +910,7 @@ def _build_word_notes(
         fallback=60,
     )
 
-    max_melisma = int(cfg.get("max_melisma_notes_per_syllable", 2))
+    max_melisma = int(cfg.get("max_melisma_notes_per_syllable", 1))
     min_pitch_event_s = float(cfg.get("min_pitch_event_ms", 160)) / 1000.0
     min_confidence = float(cfg.get("min_pitch_confidence", 0.22))
     min_change = float(cfg.get("min_melisma_change_semitones", 2.0))
