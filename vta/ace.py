@@ -130,9 +130,10 @@ def generate(cfg: dict[str, Any], base_url: str, source: Path, reference: Path,
         log("[ACE] Voice reference disabled at guide stage; Seed-VC will apply timbre later.")
 
     log(
-        "[ACE] Submitting faithful cover task "
-        f"(cover={fields['audio_cover_strength']}, "
-        f"melody={fields['cover_noise_strength']})..."
+        "[ACE] Submitting cover task "
+        f"(cover_strength={fields['audio_cover_strength']}, "
+        f"duration={fields['audio_duration']}s, "
+        f"seed={fields['seed']}, model={fields['model']})..."
     )
     payload = post_multipart(f"{base_url}/release_task", fields, files, 240)
     if payload.get("code") != 200:
