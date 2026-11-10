@@ -7,6 +7,11 @@ input/*.wav
 input/*.txt
 input/lyrics/*.txt
 input/reference/*.wav
+# Whole-vocal guides and imported ACE-Step covers
+input/guide/
+input/*_guide.*
+input/*.flac
+input/*.m4a
 !input/README.txt
 !input/lyrics.example.txt
 

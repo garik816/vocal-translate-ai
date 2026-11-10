@@ -5,8 +5,8 @@ chcp 65001 >nul
 if not exist "logs" mkdir "logs"
 
 echo ============================================================
-echo Vocal Translate AI v7.6.0 - GUIDE ONLY
-echo DiffSinger preview only. Seed-VC is skipped.
+echo Vocal Translate AI v8.0 - GUIDE ONLY
+echo Guide preview only. Seed-VC is skipped.
 echo ============================================================
 echo.
 
@@ -17,13 +17,16 @@ if %errorlevel%==0 (
     set "PS=powershell"
 )
 
-%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-if errorlevel 1 goto :fail
+rem The environment is reused between runs; rebuilding OpenUtau each time is not needed.
+if not exist "runtime\seed-vc\.venv\Scripts\python.exe" (
+    %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
+    if errorlevel 1 goto :fail
+)
 
 set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :fail
 
-"%PY%" "%~dp0app.py" --guide-only
+"%PY%" "%~dp0app.py" --auto-guide --guide-only
 if errorlevel 1 goto :fail
 
 echo.
@@ -33,6 +36,6 @@ exit /b 0
 
 :fail
 echo.
-echo FAILED. Check logs\run.log and logs\diffsinger.log
+echo FAILED. Check logs\run.log. If ACE cover is missing, run START_ACE_API.bat then ACE_ONLY.bat.
 pause
 exit /b 1

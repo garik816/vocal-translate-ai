@@ -5,8 +5,8 @@ chcp 65001 >nul
 if not exist "logs" mkdir "logs"
 
 echo ============================================================
-echo Vocal Translate AI v7.6.0
-echo MP3 + Ukrainian lyrics -^> DiffSinger -^> Seed-VC -^> MP3
+echo Vocal Translate AI v8.0 experimental
+echo Automatic guide selection -^> Seed-VC -^> original instrumental
 echo ============================================================
 echo.
 echo [%date% %time%] RUN started>>"logs\launcher.log"
@@ -18,13 +18,16 @@ if %errorlevel%==0 (
     set "PS=powershell"
 )
 
-%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-if errorlevel 1 goto :setup_fail
+rem The environment is reused between runs; rebuilding OpenUtau each time is not needed.
+if not exist "runtime\seed-vc\.venv\Scripts\python.exe" (
+    %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
+    if errorlevel 1 goto :setup_fail
+)
 
 set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :python_fail
 
-"%PY%" "%~dp0app.py"
+"%PY%" "%~dp0app.py" --auto-guide
 if errorlevel 1 goto :pipeline_fail
 
 echo.
@@ -48,7 +51,7 @@ exit /b 1
 :python_fail
 echo.
 echo ============================================================
-echo FAILED: v7 Python environment was not created.
+echo FAILED: Python environment was not created.
 echo Expected: %PY%
 echo Check logs\setup.log
 echo ============================================================
@@ -65,7 +68,7 @@ echo   logs\run.log
 echo   logs\demucs.log
 echo   logs\asr.log
 echo   logs\melody.log
-echo   logs\diffsinger.log
+echo   logs\ffmpeg.log
 echo   logs\seed_vc.log
 echo   logs\ffmpeg.log
 echo ============================================================

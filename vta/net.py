@@ -53,11 +53,64 @@ def download(url: str, output: Path, timeout: int = 180) -> None:
 
 
 def health_ok(base_url: str) -> bool:
+    """True when the local ACE-Step API accepts jobs, including lazy-load mode.
+
+    ACE-Step can start with `models_initialized=false` and load its DiT model
+    only AFTER the first /release_task request. Requiring preloaded models
+    here would deadlock the normal server startup path.
+    """
     try:
-        with urllib.request.urlopen(f"{base_url}/health", timeout=2) as response:
-            return 200 <= response.status < 300
+        with urllib.request.urlopen(f"{base_url}/health", timeout=3) as response:
+            if not 200 <= response.status < 300:
+                return False
+            try:
+                payload = json.loads(response.read(16384).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return True  # compatibility with older health endpoints
+            if not isinstance(payload, dict):
+                return False
+            if payload.get("code", 200) not in (0, 200):
+                return False
+            data = payload.get("data", payload)
+            if not isinstance(data, dict):
+                return False
+            # Do not gate on models_initialized; lazy initialization is normal.
+            return data.get("status") == "ok"
     except Exception:
         return False
+
+
+def wait_for_ace_api(base_url: str, timeout_s: float = 600.0) -> None:
+    """Wait for the HTTP API to accept requests, not model initialization.
+
+    The first cover request can trigger model loading, which ACE-Step manages.
+    """
+    if not 0 <= timeout_s <= 3600:
+        raise ValueError("ace_ready_wait_s must be in [0, 3600].")
+    if health_ok(base_url):
+        log("[ACE] API accepting requests (models may load on first job).")
+        return
+    log(
+        "[ACE] API not responding yet. Start START_ACE_API.bat in another "
+        "PowerShell and keep it open. Waiting for the HTTP server; Ctrl+C "
+        "cancels."
+    )
+    start = time.monotonic()
+    report_at = start + 15
+    while time.monotonic() - start < timeout_s:
+        time.sleep(min(5, max(0, timeout_s - (time.monotonic() - start))))
+        if health_ok(base_url):
+            log(f"[ACE] API accepting jobs after {time.monotonic() - start:.0f}s.")
+            return
+        if time.monotonic() >= report_at:
+            log(f"[ACE] Still waiting for {base_url}/health "
+                f"({time.monotonic() - start:.0f}s elapsed)...")
+            report_at += 15
+    raise RuntimeError(
+        f"ACE-Step API not responding at {base_url}/health after {timeout_s:.0f}s. "
+        "Inspect logs/ace_server.log or the START_ACE_API.bat terminal."
+    )
+
 
 
 def start_ace_server(port: int, model_name: str = "acestep-v15-turbo") -> tuple[subprocess.Popen[Any] | None, bool]:

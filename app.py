@@ -6,7 +6,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from vta import __version__, asr, audio, diffsinger, melody, seed
+from vta import __version__, ace, asr, audio, diffsinger, guide, melody, net, seed
 from vta.common import (
     LOG_DIR,
     OUT_DIR,
@@ -45,6 +45,9 @@ def process_track(
     total_tracks: int,
     extract_only: bool,
     guide_only: bool,
+    ace_only: bool = False,
+    from_ace: bool = False,
+    auto_guide: bool = False,
 ) -> list[Path]:
     track_work = WORK_DIR / original.stem
     track_work.mkdir(parents=True, exist_ok=True)
@@ -54,91 +57,167 @@ def process_track(
     log(f"TRACK: {original.name}")
     log("=" * 72)
 
+    mode = str(cfg.get("vocal_generation_mode", "external_guide")).strip().lower()
+    if from_ace:
+        mode = "external_guide"
+    if mode not in {"ace_cover", "external_guide", "diffsinger"}:
+        raise ValueError(
+            "Invalid vocal_generation_mode: " + repr(mode)
+            + "; choose ace_cover, external_guide, or diffsinger."
+        )
+    if ace_only:
+        # Phase 1: only ACE-Step, no Demucs or Seed-VC in GPU memory.
+        if str(cfg.get("ace_source_mode", "full_mix")).lower() != "full_mix":
+            raise ValueError("--ace-only requires ace_source_mode=full_mix.")
+        lyrics = find_lyrics_for(original, cfg, total_tracks)
+        base_url = str(cfg.get("ace_api_url", "http://127.0.0.1:8001")).rstrip("/")
+        net.wait_for_ace_api(
+            base_url, float(cfg.get("ace_ready_wait_s", 600))
+        )
+        covers = ace.generate(cfg, base_url, original, original, lyrics, track_work)
+        for cover in covers:
+            log(f"[ACE] Saved generated cover: {cover}")
+        log("[Mode] ACE cover complete. Stop the ACE-Step API server " +
+            "before processing it with --from-ace on a 12GB GPU.")
+        return covers
+
+    # Validate the vocal INPUT before invoking expensive Demucs/FFmpeg.
+    # V8's GUIDE_ONLY.bat does not generate a cover: ACE_ONLY.bat must run first.
+    external = None
+    ace_mix_input = bool(from_ace)
+    if not extract_only and mode == "external_guide":
+        if from_ace:
+            external = track_work / "ace_guides" / "guide_01.wav"
+            if not external.is_file():
+                raise FileNotFoundError(
+                    "Missing ACE-Step cover for " + original.name + ": " + str(external)
+                    + ". First start ACE-Step API and run ACE_ONLY.bat. "
+                    "Then stop ACE-Step API and run FROM_ACE_GUIDE_ONLY.bat. "
+                    "GUIDE_ONLY.bat alone does not generate a cover."
+                )
+        else:
+            try:
+                external = guide.find_external_guide(original, total_tracks)
+            except FileNotFoundError as exc:
+                cached_ace = track_work / "ace_guides" / "guide_01.wav"
+                if auto_guide and cached_ace.is_file():
+                    external = cached_ace
+                    ace_mix_input = True
+                    log("[Guide] No manual voice file; using cached ACE-Step cover.")
+                else:
+                    raise FileNotFoundError(
+                        str(exc) + " First run START_ACE_API.bat in another "
+                        "terminal and ACE_ONLY.bat to create the Ukrainian "
+                        "cover; stop the ACE API; then run GUIDE_ONLY.bat or "
+                        "RUN.bat. See V8_WORKFLOW.md."
+                    ) from exc
+
     stems = audio.run_demucs(original, track_work, cfg)
-    source_asr = asr.extract_source_lyrics(
-        cfg=cfg,
-        original=original,
-        vocals=stems["vocals"],
-        track_work=track_work,
-    )
-    if cfg.get("export_source_lyrics", True):
-        export_source_lyrics(original, track_work)
+
+    # Whisper/F0/USTX are *not* part of the ACE/guide-first synthesis modes.
+    source_asr = None
+    if extract_only or mode == "diffsinger":
+        source_asr = asr.extract_source_lyrics(
+            cfg=cfg,
+            original=original,
+            vocals=stems["vocals"],
+            track_work=track_work,
+        )
+        if cfg.get("export_source_lyrics", True):
+            export_source_lyrics(original, track_work)
 
     if extract_only:
-        log("[Mode] Source-lyrics extraction complete; synthesis skipped.")
+        log("[Mode] Source lyrics exported; synthesis skipped.")
         return []
-
-    lyrics = find_lyrics_for(original, cfg, total_tracks)
-    log(f"[Lyrics] Target: {lyrics}")
 
     instrumental = audio.build_instrumental(stems, track_work, ffmpeg)
     reference = audio.build_reference(
         stems["vocals"], track_work, ffmpeg, cfg, original
     )
+    repeat_plan = None
 
-    melody_data = melody.extract_melody(
-        cfg=cfg,
-        vocals=stems["vocals"],
-        track_work=track_work,
-    )
+    if mode == "diffsinger":
+        # Retain v7 as an explicit legacy fallback for A/B comparisons.
+        lyrics = find_lyrics_for(original, cfg, total_tracks)
+        melody_data = melody.extract_melody(
+            cfg=cfg, vocals=stems["vocals"], track_work=track_work
+        )
+        vocal, repeat_plan = diffsinger.render_ukrainian_guide(
+            cfg=cfg, lyrics_path=lyrics, melody=melody_data,
+            asr=source_asr, track_work=track_work,
+        )
+        final_instrumental = audio.extend_instrumental_for_repeat(
+            instrumental, repeat_plan, track_work, ffmpeg,
+        )
+    elif mode == "ace_cover":
+        lyrics = find_lyrics_for(original, cfg, total_tracks)
+        base_url = str(cfg.get("ace_api_url", "http://127.0.0.1:8001")).rstrip("/")
+        net.wait_for_ace_api(base_url, float(cfg.get("ace_ready_wait_s", 600)))
+        source_mode = str(cfg.get("ace_source_mode", "full_mix")).lower()
+        if source_mode == "delexicalized_mix":
+            cover_source = audio.build_cover_source(
+                stems, instrumental, track_work, ffmpeg, cfg
+            )
+        elif source_mode == "full_mix":
+            cover_source = original
+        else:
+            raise ValueError("ace_source_mode must be full_mix or delexicalized_mix")
 
-    guide, repeat_plan = diffsinger.render_ukrainian_guide(
-        cfg=cfg,
-        lyrics_path=lyrics,
-        melody=melody_data,
-        asr=source_asr,
-        track_work=track_work,
-    )
+        generated = ace.generate(
+            cfg=cfg, base_url=base_url, source=cover_source,
+            reference=reference, lyrics_path=lyrics, track_work=track_work,
+        )
+        if not bool(cfg.get("post_ace_demucs", True)):
+            raise RuntimeError(
+                "ACE-Step generates a FULL SONG, not isolated vocals. "
+                "post_ace_demucs must be true to avoid mixing two instrumentals."
+            )
+        if len(generated) > 1:
+            log(f"[ACE] Generated {len(generated)} candidates; using first. "
+                "All candidates remain in work/<song>/ace_guides.")
+        isolated = audio.isolate_guide_vocals([generated[0]], track_work, cfg)
+        vocal = guide.prepare_guide(
+            cfg, original, isolated[0], track_work, ffmpeg
+        )
+        final_instrumental = instrumental
 
-    final_instrumental = audio.extend_instrumental_for_repeat(
-        instrumental=instrumental,
-        repeat_plan=repeat_plan,
-        track_work=track_work,
-        ffmpeg=ffmpeg,
-    )
+    else:  # external_guide
+        assert external is not None  # checked before loading Demucs
+        log(f"[Guide] Using externally sung guide: {external}")
+        if ace_mix_input or cfg.get("external_guide_is_mix", False):
+            # Allows manually generated ACE-Step covers as input.
+            external = audio.isolate_guide_vocals(
+                [external], track_work, {**cfg, "post_ace_demucs": True}
+            )[0]
+        vocal = guide.prepare_guide(
+            cfg, original, external, track_work, ffmpeg
+        )
+        final_instrumental = instrumental
 
     guide_preview = None
     if cfg.get("write_guide_preview", True) or guide_only:
         guide_preview = audio.render_guide_preview(
-            cfg,
-            original,
-            final_instrumental,
-            guide,
-            track_work,
-            ffmpeg,
-            OUT_DIR,
+            cfg, original, final_instrumental, vocal,
+            track_work, ffmpeg, OUT_DIR,
         )
-
     if guide_only:
-        log("[Mode] Guide-only complete; Seed-VC skipped.")
+        log("[Mode] Guide-only preview complete; Seed-VC skipped.")
         return [guide_preview] if guide_preview is not None else []
 
     if cfg.get("seed_vc_enabled", True):
         converted = seed.convert(
-            cfg=cfg,
-            guides=[guide],
-            reference=reference,
+            cfg=cfg, guides=[vocal], reference=reference,
             track_work=track_work,
         )
         return audio.render_final(
-            cfg,
-            original,
-            final_instrumental,
-            converted,
-            track_work,
-            ffmpeg,
-            OUT_DIR,
+            cfg, original, final_instrumental, converted,
+            track_work, ffmpeg, OUT_DIR,
         )
 
-    log("[Seed-VC] Disabled; final output uses the DiffSinger guide timbre.")
+    log("[Seed-VC] Disabled; final output uses the guide vocal.")
     return audio.render_final(
-        cfg,
-        original,
-        final_instrumental,
-        [guide],
-        track_work,
-        ffmpeg,
-        OUT_DIR,
+        cfg, original, final_instrumental, [vocal],
+        track_work, ffmpeg, OUT_DIR,
     )
 
 
@@ -150,11 +229,25 @@ def main() -> int:
         help="Only extract source lyrics/timings from input MP3 files.",
     )
     parser.add_argument(
+        "--ace-only", action="store_true",
+        help="Generate ACE-Step covers only; requires local ACE API.",
+    )
+    parser.add_argument(
+        "--from-ace", action="store_true",
+        help="Use previous ACE cover from work/<song>/ace_guides/guide_01.wav.",
+    )
+    parser.add_argument(
+        "--auto-guide", action="store_true",
+        help="Use a manual sung guide if present, otherwise a cached ACE cover.",
+    )
+    parser.add_argument(
         "--guide-only",
         action="store_true",
         help="Render DiffSinger guide preview and stop before Seed-VC.",
     )
     args = parser.parse_args()
+    if args.ace_only and (args.from_ace or args.guide_only or args.extract_only or args.auto_guide):
+        parser.error("--ace-only cannot be combined with other modes.")
 
     for path in (LOG_DIR, OUT_DIR, WORK_DIR):
         path.mkdir(parents=True, exist_ok=True)
@@ -165,11 +258,13 @@ def main() -> int:
     ffmpeg = find_ffmpeg()
     require(SEED_DIR, "Seed-VC runtime")
 
-    log(f"=== Vocal Translate AI v{__version__}: Ukrainian DiffSinger ===")
+    log(f"=== Vocal Translate AI v{__version__}: vocal-first pipeline ===")
     log(f"Tracks found: {len(originals)}")
     mode = (
         "extract-only"
         if args.extract_only
+        else "ace-only"
+        if args.ace_only
         else "guide-only"
         if args.guide_only
         else "full pipeline"
@@ -189,6 +284,9 @@ def main() -> int:
                 total_tracks=len(originals),
                 extract_only=args.extract_only,
                 guide_only=args.guide_only,
+                ace_only=args.ace_only,
+                from_ace=args.from_ace,
+                auto_guide=args.auto_guide,
             )
             successes.append((original, outputs))
         except Exception as exc:

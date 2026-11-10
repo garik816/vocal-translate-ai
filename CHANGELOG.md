@@ -1,3 +1,17 @@
+## v8.0 (experimental) — нова схема vocal-first
+
+- Відмовилися від автоматичного Whisper→pYIN→USTX→DiffSinger у новому режимі.
+- Повний український кавер створює ACE-Step 1.5; потім Demucs відділяє його вокал.
+- Вихідний інструментал залишається з оригінального запису після Demucs.
+- Додано `ACE_ONLY.bat`, `FROM_ACE_GUIDE_ONLY.bat`, `FROM_ACE.bat`, підтримку зовнішньої вокальної доріжки, таймінг-перевірки та регресійні тести.
+- Відсутність ACE-каверу тепер перевіряється до роботи Demucs; повідомлення спрямовує до `START_ACE_API.bat` та `ACE_ONLY.bat`.
+- Додано `START_ACE_API.bat` для встановлення/запуску локального сервера ACE-Step. `RUN.bat` і `GUIDE_ONLY.bat` тепер автоматично обирають чисту вокальну доріжку або кешований кавер.
+- Виправлено KeyError у виведенні параметрів ACE-Step Cover (`cover_noise_strength` було прибрано з API-запиту).
+- У v8 інсталятор пропускає збірку OpenUtau/DiffSinger у новому режимі та не запускається заново при кожному BAT-запуску.
+- ACE-Step отримує `use_random_seed=false` для відтворюваного `ace_seed`.
+- Старий DiffSinger лишився як окремий режим.
+- Деталі: [V8_WORKFLOW.md](V8_WORKFLOW.md).
+
 # Історія змін — Vocal Translate AI
 
 Короткий технічний журнал. Докладні інструкції: **[README.md](README.md)** · **[QUICKSTART.md](QUICKSTART.md)**.
