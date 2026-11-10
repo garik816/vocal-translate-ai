@@ -71,9 +71,9 @@ def process_track(
             raise ValueError("--ace-only requires ace_source_mode=full_mix.")
         lyrics = find_lyrics_for(original, cfg, total_tracks)
         base_url = str(cfg.get("ace_api_url", "http://127.0.0.1:8001")).rstrip("/")
-        if not net.health_ok(base_url):
-            raise RuntimeError("ACE-Step API is not reachable at " + base_url +
-                ". Start it with START_ACE_API.bat, then retry ACE_ONLY.bat.")
+        net.wait_for_ace_api(
+            base_url, float(cfg.get("ace_ready_wait_s", 600))
+        )
         covers = ace.generate(cfg, base_url, original, original, lyrics, track_work)
         for cover in covers:
             log(f"[ACE] Saved generated cover: {cover}")
@@ -152,12 +152,7 @@ def process_track(
     elif mode == "ace_cover":
         lyrics = find_lyrics_for(original, cfg, total_tracks)
         base_url = str(cfg.get("ace_api_url", "http://127.0.0.1:8001")).rstrip("/")
-        if not net.health_ok(base_url):
-            raise RuntimeError(
-                "ACE-Step 1.5 API is not running at " + base_url + ". "
-                "Start ACE-Step using start_api_server.bat or 'uv run acestep-api'. "
-                "See V8_WORKFLOW.md."
-            )
+        net.wait_for_ace_api(base_url, float(cfg.get("ace_ready_wait_s", 600)))
         source_mode = str(cfg.get("ace_source_mode", "full_mix")).lower()
         if source_mode == "delexicalized_mix":
             cover_source = audio.build_cover_source(
