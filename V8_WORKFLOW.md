@@ -1,6 +1,6 @@
 # Vocal Translate AI v8 — новий підхід до перекладу пісень
 
-> **Експериментальна гілка:** `feat/v8-vocal-first`. Не замінює v7.6 у `main`; звук ще не проходив реального end-to-end тесту на RTX 3080 Ti.
+> **Експериментальна гілка:** `feat/v8-vocal-first`. Не замінює v7.6 у `main`; повний аудіорендер на RTX 5080 Laptop ще не перевірявся.
 
 ## Навіщо змінили підхід
 
@@ -55,21 +55,21 @@ cd C:\work\vocal-translate-ai-v8
 
 Встановлення У v8 `setup.ps1` перевіряє `vocal_generation_mode` у `config.json`. Якщо обрано `external_guide` або `ace_cover`, **OpenUtau, DiffSinger і .NET 10 не встановлюються та не збираються**. Для режиму `diffsinger` попередні залежності залишаються доступними. Повторні BAT-запуски використовують наявний Python-venv.
 
-### 2. Встановіть і запустіть ACE-Step 1.5 в окремому PowerShell
+### 2. Встановіть і запустіть ACE-Step 1.5
+
+У **другому вікні PowerShell** в папці Vocal Translate AI виконайте:
 
 ```powershell
-cd C:\work
-git clone https://github.com/ace-step/ACE-Step-1.5.git
-cd .\ACE-Step-1.5
-uv sync
-$env:ACESTEP_INIT_LLM = "false"
-$env:ACESTEP_OFFLOAD_TO_CPU = "true"
-uv run acestep-api
+.\START_ACE_API.bat
 ```
 
-API має відповідати на `http://127.0.0.1:8001/health`. Альтернатива з офіційної Windows-збірки — **`start_api_server.bat`**. Повна інструкція: https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/INSTALL.md .
+Скрипт перевірить `http://127.0.0.1:8001/health` і за потреби клонує ACE-Step у сусідню папку `C:\work\ACE-Step-1.5`, встановить його залежності через `uv sync` та запустить локальний REST API. Під час першого запуску завантажуються моделі. Діагностика: `logs/ace_api.log`. Вікно API **не закривайте**, поки працює `ACE_ONLY.bat`.
 
-На 12 ГБ VRAM краще використовувати модель `acestep-v15-turbo`, batch 1, без LLM. **Не тримайте завантажені важкі моделі Ollama та ComfyUI одночасно.**
+Для іншої папки ACE-Step можна перед запуском вказати `$env:ACE_STEP_DIR = 'D:\AI\ACE-Step-1.5'`.
+
+Офіційна інструкція: https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/INSTALL.md .
+
+Для RTX 5080 Laptop 16 ГБ доцільно почати з `acestep-v15-turbo`, `batch_size=1`, без LLM. Не тримайте ComfyUI/Ollama з великими моделями в пам'яті одночасно.
 
 ### 3. Покладіть оригінал та українські слова
 
@@ -83,7 +83,7 @@ input/
 
 ### 4. Згенеруйте кавер без Seed-VC і Demucs
 
-**Увага: не починайте з `GUIDE_ONLY.bat`.** Цей файл працює лише з уже підготовленим зовнішнім чистим `input/guide.wav`. Для створення вокалу через ACE-Step спочатку запустіть `ACE_ONLY.bat`; тільки після цього `FROM_ACE_GUIDE_ONLY.bat`. Якщо створеного кавера немає, програма зупиниться до запуску Demucs і підкаже, що робити.
+**Увага:** `GUIDE_ONLY.bat` **не генерує** кавер. Він приймає готовий `input/guide.wav` або вже створений ACE-Step кавер. Тому спочатку потрібні `START_ACE_API.bat` та `ACE_ONLY.bat`.
 
 В іншому PowerShell у папці `vocal-translate-ai-v8`:
 
@@ -106,6 +106,8 @@ input/
 - відкоригує **лише загальну тривалість** до оригінальної;
 - збере попередній мікс з інструменталом оригіналу.
 
+Альтернатива після ACE_ONLY: `GUIDE_ONLY.bat` тепер автоматично знаходить кешований кавер, якщо немає окремого `input/guide.wav`.
+
 Результат: `out/song_uk_guide.mp3`. Якщо слова або ноти все ще погані, Seed-VC **не допоможе** — потрібно змінити параметри ACE-Step та заново створити кавер.
 
 ### 6. Перенесіть тембр
@@ -113,6 +115,8 @@ input/
 ```powershell
 .\FROM_ACE.bat
 ```
+
+Альтернатива: `RUN.bat` автоматично вибирає чистий вокал або вже готовий ACE-Step кавер.
 
 Результат: `out/song_uk.mp3`. Seed-VC використовує чистий референс `input/reference.wav` або автоматично виділений вокал оригіналу.
 
