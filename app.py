@@ -47,6 +47,7 @@ def process_track(
     guide_only: bool,
     ace_only: bool = False,
     from_ace: bool = False,
+    auto_guide: bool = False,
 ) -> list[Path]:
     track_work = WORK_DIR / original.stem
     track_work.mkdir(parents=True, exist_ok=True)
@@ -72,7 +73,7 @@ def process_track(
         base_url = str(cfg.get("ace_api_url", "http://127.0.0.1:8001")).rstrip("/")
         if not net.health_ok(base_url):
             raise RuntimeError("ACE-Step API is not reachable at " + base_url +
-                ". Run start_api_server.bat in ACE-Step-1.5 first.")
+                ". Start it with START_ACE_API.bat, then retry ACE_ONLY.bat.")
         covers = ace.generate(cfg, base_url, original, original, lyrics, track_work)
         for cover in covers:
             log(f"[ACE] Saved generated cover: {cover}")
@@ -83,6 +84,7 @@ def process_track(
     # Validate the vocal INPUT before invoking expensive Demucs/FFmpeg.
     # V8's GUIDE_ONLY.bat does not generate a cover: ACE_ONLY.bat must run first.
     external = None
+    ace_mix_input = bool(from_ace)
     if not extract_only and mode == "external_guide":
         if from_ace:
             external = track_work / "ace_guides" / "guide_01.wav"
@@ -97,11 +99,18 @@ def process_track(
             try:
                 external = guide.find_external_guide(original, total_tracks)
             except FileNotFoundError as exc:
-                raise FileNotFoundError(
-                    str(exc) + " To generate the guide with ACE-Step instead, "
-                    "run ACE_ONLY.bat, then FROM_ACE_GUIDE_ONLY.bat. "
-                    "See V8_WORKFLOW.md."
-                ) from exc
+                cached_ace = track_work / "ace_guides" / "guide_01.wav"
+                if auto_guide and cached_ace.is_file():
+                    external = cached_ace
+                    ace_mix_input = True
+                    log("[Guide] No manual voice file; using cached ACE-Step cover.")
+                else:
+                    raise FileNotFoundError(
+                        str(exc) + " First run START_ACE_API.bat in another "
+                        "terminal and ACE_ONLY.bat to create the Ukrainian "
+                        "cover; stop the ACE API; then run GUIDE_ONLY.bat or "
+                        "RUN.bat. See V8_WORKFLOW.md."
+                    ) from exc
 
     stems = audio.run_demucs(original, track_work, cfg)
 
@@ -180,7 +189,7 @@ def process_track(
     else:  # external_guide
         assert external is not None  # checked before loading Demucs
         log(f"[Guide] Using externally sung guide: {external}")
-        if from_ace or cfg.get("external_guide_is_mix", False):
+        if ace_mix_input or cfg.get("external_guide_is_mix", False):
             # Allows manually generated ACE-Step covers as input.
             external = audio.isolate_guide_vocals(
                 [external], track_work, {**cfg, "post_ace_demucs": True}
@@ -233,12 +242,16 @@ def main() -> int:
         help="Use previous ACE cover from work/<song>/ace_guides/guide_01.wav.",
     )
     parser.add_argument(
+        "--auto-guide", action="store_true",
+        help="Use a manual sung guide if present, otherwise a cached ACE cover.",
+    )
+    parser.add_argument(
         "--guide-only",
         action="store_true",
         help="Render DiffSinger guide preview and stop before Seed-VC.",
     )
     args = parser.parse_args()
-    if args.ace_only and (args.from_ace or args.guide_only or args.extract_only):
+    if args.ace_only and (args.from_ace or args.guide_only or args.extract_only or args.auto_guide):
         parser.error("--ace-only cannot be combined with other modes.")
 
     for path in (LOG_DIR, OUT_DIR, WORK_DIR):
@@ -278,6 +291,7 @@ def main() -> int:
                 guide_only=args.guide_only,
                 ace_only=args.ace_only,
                 from_ace=args.from_ace,
+                auto_guide=args.auto_guide,
             )
             successes.append((original, outputs))
         except Exception as exc:
