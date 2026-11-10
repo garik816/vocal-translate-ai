@@ -1,7 +1,7 @@
 > **Нова версія v8:** [див. V8_WORKFLOW.md](V8_WORKFLOW.md).
 >
-> Для перевірки цілісного українського вокалу замість DiffSinger **не починайте з `GUIDE_ONLY.bat`**:
-> `ACE_ONLY.bat` → зупинити ACE API → `FROM_ACE_GUIDE_ONLY.bat` → `FROM_ACE.bat`.
+> У другому PowerShell запустіть **`START_ACE_API.bat`**: він налаштує й запустить ACE-Step 1.5 API.
+> У першому PowerShell: **`ACE_ONLY.bat`** → зупинити ACE-Step API → **`GUIDE_ONLY.bat`** для прослуховування → **`RUN.bat`** для фіналу. Звичайні BAT-файли тепер самі знайдуть готовий ACE-кавер.
 >
 > Решта цієї інструкції описує історичний v7-конвеєр.
 >
