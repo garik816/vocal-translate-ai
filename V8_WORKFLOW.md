@@ -63,7 +63,7 @@ cd C:\work\vocal-translate-ai-v8
 .\START_ACE_API.bat
 ```
 
-Скрипт перевірить `http://127.0.0.1:8001/health` і за потреби клонує ACE-Step у сусідню папку `C:\work\ACE-Step-1.5`, встановить його залежності через `uv sync` та запустить локальний REST API. Під час першого запуску завантажуються моделі. Діагностика: `logs/ace_api.log`. Вікно API **не закривайте**, поки працює `ACE_ONLY.bat`.
+Скрипт перевірить `http://127.0.0.1:8001/health` і за потреби клонує ACE-Step у сусідню папку `C:\work\ACE-Step-1.5`, встановить його залежності через `uv sync` та запустить локальний REST API. Під час першого запуску завантажуються моделі. Діагностика: **`logs/ace_server.log`** (весь stdout/stderr Python, у тому числі завантаження моделі) та `logs/ace_api.log` (PowerShell). Вікно API **не закривайте**, поки працює `ACE_ONLY.bat`.
 
 Для іншої папки ACE-Step можна перед запуском вказати `$env:ACE_STEP_DIR = 'D:\AI\ACE-Step-1.5'`.
 
@@ -82,6 +82,15 @@ input/
 `lyrics.txt` — ваш готовий **еквіритмічний** текст із секціями `[Verse]`, `[Chorus]`, `[Outro]`; транскрипція оригіналу НЕ підходить.
 
 ### 4. Згенеруйте кавер без Seed-VC і Demucs
+
+`ACE_ONLY.bat` тепер очікує до **600 секунд**, поки `http://127.0.0.1:8001/health` повідомить `models_initialized=true`. Стан завантаження видно у вікні ACE API та `logs/ace_server.log`. За потреби змініть `ace_ready_wait_s` у `config.json`; Ctrl+C зупиняє очікування.
+
+Перевірити готовність API можна у PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/health | ConvertTo-Json -Depth 4
+```
+
 
 **Увага:** `GUIDE_ONLY.bat` **не генерує** кавер. Він приймає готовий `input/guide.wav` або вже створений ACE-Step кавер. Тому спочатку потрібні `START_ACE_API.bat` та `ACE_ONLY.bat`.
 
@@ -128,6 +137,7 @@ input/
 | :-- | :-- |
 | `vocal_generation_mode` | `"external_guide"` — для `RUN.bat`; staged launcher має власні прапорці |
 | `ace_api_url` | `"http://127.0.0.1:8001"` |
+| `ace_ready_wait_s` | `600` — максимальне очікування завантаження моделі ACE-Step |
 | `ace_model` | `"acestep-v15-turbo"` |
 | `cover_strength` | `0.80` для початку; можна порівняти з `0.65` |
 | `ace_seed` | `42` для повторюваних порівнянь |
