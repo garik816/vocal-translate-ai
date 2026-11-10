@@ -10,7 +10,7 @@ from vta import ace, guide, net
 
 
 class GuideAlignmentTests(unittest.TestCase):
-    def test_ace_api_health_requires_model_loaded(self):
+    def test_ace_api_health_accepts_lazy_loaded_server(self):
         from unittest.mock import MagicMock
 
         response = MagicMock()
@@ -20,13 +20,26 @@ class GuideAlignmentTests(unittest.TestCase):
             b'{"code":200,"data":{"status":"ok","models_initialized":false}}'
         )
         with patch.object(net.urllib.request, "urlopen", return_value=response):
-            self.assertFalse(net.health_ok("http://127.0.0.1:8001"))
+            # False is expected until the FIRST cover request starts a model.
+            self.assertTrue(net.health_ok("http://127.0.0.1:8001"))
 
         response.read.return_value = (
             b'{"code":200,"data":{"status":"ok","models_initialized":true}}'
         )
         with patch.object(net.urllib.request, "urlopen", return_value=response):
             self.assertTrue(net.health_ok("http://127.0.0.1:8001"))
+
+        response.read.return_value = (
+            b'{"code":200,"data":{"status":"error","models_initialized":false}}'
+        )
+        with patch.object(net.urllib.request, "urlopen", return_value=response):
+            self.assertFalse(net.health_ok("http://127.0.0.1:8001"))
+
+        response.read.return_value = (
+            b'{"code":503,"data":{"status":"ok","models_initialized":false}}'
+        )
+        with patch.object(net.urllib.request, "urlopen", return_value=response):
+            self.assertFalse(net.health_ok("http://127.0.0.1:8001"))
 
     def test_wait_for_ace_api_polls_until_ready(self):
         with patch.object(net, "health_ok", side_effect=[False, False, True]) as check, \
