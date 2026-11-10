@@ -83,13 +83,15 @@ input/
 
 ### 4. Згенеруйте кавер без Seed-VC і Demucs
 
-`ACE_ONLY.bat` тепер очікує до **600 секунд**, поки `http://127.0.0.1:8001/health` повідомить `models_initialized=true`. Стан завантаження видно у вікні ACE API та `logs/ace_server.log`. За потреби змініть `ace_ready_wait_s` у `config.json`; Ctrl+C зупиняє очікування.
+`ACE_ONLY.bat` очікує доступності **HTTP API**, а не готовності ваг моделі. У типовому ACE-Step 1.5 сервер працює в режимі *lazy loading*: `GET /health` відповідає `status: ok` і `models_initialized: false` **до першого завдання**. Це нормально. Після запуску `ACE_ONLY.bat` сервер сам ініціалізує модель. Параметр `ace_ready_wait_s` (типово 600 с) обмежує очікування появи HTTP API, а не час генерації. Стан завантаження і можливі помилки дивіться у вікні ACE-Step та `logs/ace_server.log`.
 
 Перевірити готовність API можна у PowerShell:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8001/health | ConvertTo-Json -Depth 4
 ```
+
+Якщо `status=ok`, але `models_initialized=false`, **можна запускати `ACE_ONLY.bat`** — перший запит запустить lazy initialization. `llm_initialized=false` також нормально для нашого режиму без LLM.
 
 
 **Увага:** `GUIDE_ONLY.bat` **не генерує** кавер. Він приймає готовий `input/guide.wav` або вже створений ACE-Step кавер. Тому спочатку потрібні `START_ACE_API.bat` та `ACE_ONLY.bat`.
