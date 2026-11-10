@@ -6,7 +6,7 @@ if not exist "logs" mkdir "logs"
 
 echo ============================================================
 echo Vocal Translate AI v8.0 experimental
-echo Full-timeline guide vocal -^> Seed-VC -^> original instrumental
+echo Automatic guide selection -^> Seed-VC -^> original instrumental
 echo ============================================================
 echo.
 echo [%date% %time%] RUN started>>"logs\launcher.log"
@@ -27,7 +27,7 @@ if not exist "runtime\seed-vc\.venv\Scripts\python.exe" (
 set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :python_fail
 
-"%PY%" "%~dp0app.py"
+"%PY%" "%~dp0app.py" --auto-guide
 if errorlevel 1 goto :pipeline_fail
 
 echo.
