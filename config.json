@@ -9,6 +9,7 @@
   "ace_inference_steps": 8,
   "ace_batch_size": 1,
   "ace_task_timeout_s": 1200,
+  "ace_ready_wait_s": 600,
   "ace_use_reference_audio": false,
   "reuse_ace_guides": true,
   "post_ace_demucs": true,
