@@ -6,10 +6,34 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
-from vta import ace, guide
+from vta import ace, guide, net
 
 
 class GuideAlignmentTests(unittest.TestCase):
+    def test_ace_api_health_requires_model_loaded(self):
+        from unittest.mock import MagicMock
+
+        response = MagicMock()
+        response.status = 200
+        response.__enter__.return_value = response
+        response.read.return_value = (
+            b'{"code":200,"data":{"status":"ok","models_initialized":false}}'
+        )
+        with patch.object(net.urllib.request, "urlopen", return_value=response):
+            self.assertFalse(net.health_ok("http://127.0.0.1:8001"))
+
+        response.read.return_value = (
+            b'{"code":200,"data":{"status":"ok","models_initialized":true}}'
+        )
+        with patch.object(net.urllib.request, "urlopen", return_value=response):
+            self.assertTrue(net.health_ok("http://127.0.0.1:8001"))
+
+    def test_wait_for_ace_api_polls_until_ready(self):
+        with patch.object(net, "health_ok", side_effect=[False, False, True]) as check, \
+             patch.object(net.time, "sleep"):
+            net.wait_for_ace_api("http://127.0.0.1:8001", timeout_s=30)
+            self.assertEqual(check.call_count, 3)
+
     def test_duration_ratio_is_pitch_preserving_atempo_factor(self):
         self.assertAlmostEqual(guide.timing_ratio(181.0, 180.0), 181.0 / 180.0)
 
@@ -175,7 +199,7 @@ class VocalFirstTests(unittest.TestCase):
             generated = Path(root) / "cover.wav"
             with patch.object(app, "WORK_DIR", Path(root)), \
                  patch.object(app, "find_lyrics_for", return_value=Path(root) / "lyrics.txt"), \
-                 patch.object(app.net, "health_ok", return_value=True), \
+                 patch.object(app.net, "wait_for_ace_api") as wait, \
                  patch.object(app.ace, "generate", return_value=[generated]) as cover, \
                  patch.object(app.audio, "run_demucs") as demucs, \
                  patch.object(app.seed, "convert") as seed:
