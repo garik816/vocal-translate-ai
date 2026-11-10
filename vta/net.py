@@ -53,9 +53,11 @@ def download(url: str, output: Path, timeout: int = 180) -> None:
 
 
 def health_ok(base_url: str) -> bool:
-    """Return True only when ACE-Step API reports its DiT model as initialized.
+    """True when the local ACE-Step API accepts jobs, including lazy-load mode.
 
-    A 200 /health response can arrive while models_initialized is still false.
+    ACE-Step can start with `models_initialized=false` and load its DiT model
+    only AFTER the first /release_task request. Requiring preloaded models
+    here would deadlock the normal server startup path.
     """
     try:
         with urllib.request.urlopen(f"{base_url}/health", timeout=3) as response:
@@ -64,47 +66,51 @@ def health_ok(base_url: str) -> bool:
             try:
                 payload = json.loads(response.read(16384).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
-                return True  # support older API versions without JSON health
+                return True  # compatibility with older health endpoints
             if not isinstance(payload, dict):
-                return True
-            data = payload.get("data", payload)
-            if isinstance(data, dict) and data.get("models_initialized") is False:
                 return False
-            return True
+            if payload.get("code", 200) not in (0, 200):
+                return False
+            data = payload.get("data", payload)
+            if not isinstance(data, dict):
+                return False
+            # Do not gate on models_initialized; lazy initialization is normal.
+            return data.get("status") == "ok"
     except Exception:
         return False
 
 
 def wait_for_ace_api(base_url: str, timeout_s: float = 600.0) -> None:
-    """Wait for the separate server to finish downloading/loading weights.
+    """Wait for the HTTP API to accept requests, not model initialization.
 
-    Does not launch a server or download anything; START_ACE_API.bat does that.
+    The first cover request can trigger model loading, which ACE-Step manages.
     """
-    if health_ok(base_url):
-        log("[ACE] API ready (model initialized).")
-        return
     if not 0 <= timeout_s <= 3600:
         raise ValueError("ace_ready_wait_s must be in [0, 3600].")
+    if health_ok(base_url):
+        log("[ACE] API accepting requests (models may load on first job).")
+        return
     log(
-        "[ACE] API not ready yet. Start START_ACE_API.bat in another PowerShell "
-        "and keep it open. Waiting for model initialization; press Ctrl+C to cancel."
+        "[ACE] API not responding yet. Start START_ACE_API.bat in another "
+        "PowerShell and keep it open. Waiting for the HTTP server; Ctrl+C "
+        "cancels."
     )
     start = time.monotonic()
     report_at = start + 15
     while time.monotonic() - start < timeout_s:
         time.sleep(min(5, max(0, timeout_s - (time.monotonic() - start))))
         if health_ok(base_url):
-            log(f"[ACE] API ready after {time.monotonic() - start:.0f}s.")
+            log(f"[ACE] API accepting jobs after {time.monotonic() - start:.0f}s.")
             return
         if time.monotonic() >= report_at:
             log(f"[ACE] Still waiting for {base_url}/health "
                 f"({time.monotonic() - start:.0f}s elapsed)...")
             report_at += 15
     raise RuntimeError(
-        f"ACE-Step API not ready at {base_url}/health after {timeout_s:.0f}s. "
-        "Inspect logs/ace_server.log and the START_ACE_API.bat window. "
-        "Check if the initial model download is still running."
+        f"ACE-Step API not responding at {base_url}/health after {timeout_s:.0f}s. "
+        "Inspect logs/ace_server.log or the START_ACE_API.bat terminal."
     )
+
 
 
 def start_ace_server(port: int, model_name: str = "acestep-v15-turbo") -> tuple[subprocess.Popen[Any] | None, bool]:
