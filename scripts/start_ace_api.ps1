@@ -10,7 +10,9 @@ $HealthUrl = 'http://127.0.0.1:8001/health'
 function Test-AceHealth {
     try {
         $response = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 3 -ErrorAction Stop
-        return $response.code -eq 200 -or $response.data.status -eq 'ok'
+        $httpReady = $response.code -eq 200 -or $response.data.status -eq 'ok'
+        # /health can answer before DiT weights finish initializing.
+        return $httpReady -and $response.data.models_initialized -eq $true
     } catch {
         return $false
     }
@@ -70,15 +72,25 @@ try {
     $env:ACESTEP_API_HOST = '127.0.0.1'
     $env:ACESTEP_API_PORT = '8001'
     $env:ACESTEP_INIT_LLM = 'false'
+    $env:ACESTEP_CONFIG_PATH = 'acestep-v15-turbo'
+    $env:PYTHONUNBUFFERED = '1'
     Write-Host ""
     Write-Host "Starting ACE-Step 1.5 API (first startup downloads models)." -ForegroundColor Cyan
     Write-Host "Keep this window OPEN during ACE_ONLY.bat."
     Write-Host "After ACE_ONLY.bat finishes: press Ctrl+C here to free GPU VRAM."
     Write-Host "Then run FROM_ACE_GUIDE_ONLY.bat in Vocal Translate AI."
     Write-Host ""
-    & uv run --no-sync acestep-api
-    if ($LASTEXITCODE -ne 0) {
-        throw "ACE-Step API exited with code $LASTEXITCODE. Check logs\ace_api.log."
+    # Native child stdout/stderr are not reliably preserved by Start-Transcript
+    # alone. Tee-Object makes the real ACE model download and startup messages
+    # available in a standalone diagnostic file.
+    $NativeLog = Join-Path $Logs 'ace_server.log'
+    Write-Host "[ACE] Native server output: $NativeLog"
+    & uv run --no-sync acestep-api 2>&1 |
+        ForEach-Object { [string]$_ } |
+        Tee-Object -FilePath $NativeLog -Append
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "ACE-Step API exited with code $exitCode. See logs\ace_server.log."
     }
 } finally {
     if ($TranscriptStarted) {
