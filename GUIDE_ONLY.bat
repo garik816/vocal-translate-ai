@@ -26,7 +26,7 @@ if not exist "runtime\seed-vc\.venv\Scripts\python.exe" (
 set "PY=runtime\seed-vc\.venv\Scripts\python.exe"
 if not exist "%PY%" goto :fail
 
-"%PY%" "%~dp0app.py" --guide-only
+"%PY%" "%~dp0app.py" --auto-guide --guide-only
 if errorlevel 1 goto :fail
 
 echo.
@@ -36,6 +36,6 @@ exit /b 0
 
 :fail
 echo.
-echo FAILED. Check logs\run.log. For ACE covers run ACE_ONLY.bat first, then FROM_ACE_GUIDE_ONLY.bat
+echo FAILED. Check logs\run.log. If ACE cover is missing, run START_ACE_API.bat then ACE_ONLY.bat.
 pause
 exit /b 1
