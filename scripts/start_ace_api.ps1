@@ -10,9 +10,9 @@ $HealthUrl = 'http://127.0.0.1:8001/health'
 function Test-AceHealth {
     try {
         $response = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 3 -ErrorAction Stop
-        $httpReady = $response.code -eq 200 -or $response.data.status -eq 'ok'
-        # /health can answer before DiT weights finish initializing.
-        return $httpReady -and $response.data.models_initialized -eq $true
+        # Lazy loading is the ACE-Step API default: models_initialized=false
+        # is a healthy *idle* server. First /release_task initializes the DiT.
+        return $response.code -eq 200 -and $response.data.status -eq 'ok'
     } catch {
         return $false
     }
